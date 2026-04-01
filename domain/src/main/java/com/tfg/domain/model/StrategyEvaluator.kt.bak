@@ -1,0 +1,542 @@
+package com.tfg.domain.model
+
+/**
+ * Pure strategy evaluation engine — no dependencies.
+ * Used by both StrategyRunner (live) and backtesting.
+ */
+object StrategyEvaluator {
+
+    fun evaluate(templateId: String?, candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        if (candles.isEmpty()) return StrategySignal.HOLD
+        return when (templateId) {
+            StrategyTemplateId.SMA_CROSSOVER.name -> evaluateSmaCrossover(candles, params)
+            StrategyTemplateId.RSI_MEAN_REVERSION.name -> evaluateRsiMeanReversion(candles, params)
+            StrategyTemplateId.BOLLINGER_BREAKOUT.name -> evaluateBollingerBreakout(candles, params)
+            StrategyTemplateId.MACD_MOMENTUM.name -> evaluateMacdMomentum(candles, params)
+            StrategyTemplateId.EMA_SCALPER.name -> evaluateEmaScalper(candles, params)
+            StrategyTemplateId.GRID_TRADER.name -> evaluateGridTrader(candles, params)
+            StrategyTemplateId.GAINZ_ALGO.name -> evaluateGainzAlgo(candles, params)
+            else -> StrategySignal.HOLD
+        }
+    }
+
+    // ─── Indicator helpers (public for chart overlays) ──────────────
+
+    fun sma(candles: List<Candle>, period: Int): Double {
+        if (candles.size < period) return candles.last().close
+        return candles.takeLast(period).map { it.close }.average()
+    }
+
+    fun ema(candles: List<Candle>, period: Int): Double {
+        if (candles.size < period) return candles.last().close
+        val multiplier = 2.0 / (period + 1)
+        var emaVal = candles.take(period).map { it.close }.average()
+        for (i in period until candles.size) {
+            emaVal = (candles[i].close - emaVal) * multiplier + emaVal
+        }
+        return emaVal
+    }
+
+    fun rsi(candles: List<Candle>, period: Int): Double {
+        if (candles.size < period + 1) return 50.0
+        val closes = candles.map { it.close }
+        var avgGain = 0.0
+        var avgLoss = 0.0
+        for (i in 1..period) {
+            val change = closes[i] - closes[i - 1]
+            if (change > 0) avgGain += change else avgLoss -= change
+        }
+        avgGain /= period
+        avgLoss /= period
+        for (i in period + 1 until closes.size) {
+            val change = closes[i] - closes[i - 1]
+            avgGain = (avgGain * (period - 1) + if (change > 0) change else 0.0) / period
+            avgLoss = (avgLoss * (period - 1) + if (change < 0) -change else 0.0) / period
+        }
+        if (avgLoss == 0.0) return 100.0
+        val rs = avgGain / avgLoss
+        return 100.0 - (100.0 / (1.0 + rs))
+    }
+
+    /** Compute RSI series for every bar from [period] onward. */
+    fun rsiSeries(candles: List<Candle>, period: Int): List<Double> {
+        val result = mutableListOf<Double>()
+        for (i in candles.indices) {
+            if (i < period) {
+                result.add(50.0)
+            } else {
+                result.add(rsi(candles.subList(0, i + 1), period))
+            }
+        }
+        return result
+    }
+
+    /** Compute SMA series for every bar. */
+    fun smaSeries(candles: List<Candle>, period: Int): List<Double?> {
+        return candles.indices.map { i ->
+            if (i + 1 < period) null
+            else candles.subList(0, i + 1).takeLast(period).map { it.close }.average()
+        }
+    }
+
+    /** Compute EMA series for every bar. */
+    fun emaSeries(candles: List<Candle>, period: Int): List<Double?> {
+        if (candles.size < period) return candles.map { null }
+        val multiplier = 2.0 / (period + 1)
+        val result = mutableListOf<Double?>()
+        for (i in 0 until period - 1) result.add(null)
+        var emaVal = candles.take(period).map { it.close }.average()
+        result.add(emaVal)
+        for (i in period until candles.size) {
+            emaVal = (candles[i].close - emaVal) * multiplier + emaVal
+            result.add(emaVal)
+        }
+        return result
+    }
+
+    /** Bollinger Bands: returns (upper, middle, lower) series. */
+    fun bollingerSeries(candles: List<Candle>, period: Int = 20, mult: Double = 2.0): Triple<List<Double?>, List<Double?>, List<Double?>> {
+        val upper = mutableListOf<Double?>()
+        val middle = mutableListOf<Double?>()
+        val lower = mutableListOf<Double?>()
+        for (i in candles.indices) {
+            if (i + 1 < period) {
+                upper.add(null); middle.add(null); lower.add(null)
+            } else {
+                val slice = candles.subList(i + 1 - period, i + 1).map { it.close }
+                val smaVal = slice.average()
+                val sd = stdDev(slice)
+                upper.add(smaVal + mult * sd)
+                middle.add(smaVal)
+                lower.add(smaVal - mult * sd)
+            }
+        }
+        return Triple(upper, middle, lower)
+    }
+
+    /** MACD: returns (macdLine, signalLine, histogram) series. */
+    fun macdSeries(candles: List<Candle>, fast: Int = 12, slow: Int = 26, signal: Int = 9): Triple<List<Double?>, List<Double?>, List<Double?>> {
+        val emaFastSeries = emaSeries(candles, fast)
+        val emaSlowSeries = emaSeries(candles, slow)
+        val macdLine = emaFastSeries.zip(emaSlowSeries).map { (f, s) ->
+            if (f != null && s != null) f - s else null
+        }
+        // Signal line = EMA of macdLine
+        val nonNull = macdLine.filterNotNull()
+        if (nonNull.size < signal) return Triple(macdLine, macdLine.map { null }, macdLine.map { null })
+        val multiplier = 2.0 / (signal + 1)
+        val signalLine = mutableListOf<Double?>()
+        var idx = 0
+        var emaVal: Double? = null
+        for (v in macdLine) {
+            if (v == null) { signalLine.add(null); continue }
+            idx++
+            if (idx < signal) { signalLine.add(null); continue }
+            if (idx == signal) {
+                emaVal = macdLine.filterNotNull().take(signal).average()
+            } else {
+                emaVal = (v - emaVal!!) * multiplier + emaVal
+            }
+            signalLine.add(emaVal)
+        }
+        val histogram = macdLine.zip(signalLine).map { (m, s) ->
+            if (m != null && s != null) m - s else null
+        }
+        return Triple(macdLine, signalLine, histogram)
+    }
+
+    fun stdDev(values: List<Double>): Double {
+        val avg = values.average()
+        val variance = values.map { (it - avg) * (it - avg) }.average()
+        return Math.sqrt(variance)
+    }
+
+    fun atr(candles: List<Candle>, period: Int): Double {
+        if (candles.size < period + 1) return 0.0
+        val trueRanges = mutableListOf<Double>()
+        for (i in 1 until candles.size) {
+            val high = candles[i].high
+            val low = candles[i].low
+            val prevClose = candles[i - 1].close
+            trueRanges.add(maxOf(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)))
+        }
+        return trueRanges.takeLast(period).average()
+    }
+
+    fun adx(candles: List<Candle>, period: Int): Double {
+        if (candles.size < period * 2) return 0.0
+        var plusDm = 0.0
+        var minusDm = 0.0
+        for (i in candles.size - period until candles.size) {
+            val upMove = candles[i].high - candles[i - 1].high
+            val downMove = candles[i - 1].low - candles[i].low
+            if (upMove > downMove && upMove > 0) plusDm += upMove
+            if (downMove > upMove && downMove > 0) minusDm += downMove
+        }
+        val atrVal = atr(candles, period)
+        if (atrVal == 0.0) return 0.0
+        val plusDi = 100.0 * plusDm / period / atrVal
+        val minusDi = 100.0 * minusDm / period / atrVal
+        val sum = plusDi + minusDi
+        if (sum == 0.0) return 0.0
+        return 100.0 * Math.abs(plusDi - minusDi) / sum
+    }
+
+    // ─── Strategy evaluations ───────────────────────────────────────
+
+    // Helper to read a param with a default
+    private fun Map<String, String>.int(key: String, default: Int): Int =
+        this[key]?.toIntOrNull() ?: default
+    private fun Map<String, String>.dbl(key: String, default: Double): Double =
+        this[key]?.toDoubleOrNull() ?: default
+
+    private fun evaluateSmaCrossover(candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        val fastPeriod = params.int("FAST_PERIOD", 10)
+        val slowPeriod = params.int("SLOW_PERIOD", 50)
+        val rsiPeriod = params.int("RSI_PERIOD", 14)
+        val rsiOverbought = params.dbl("RSI_OVERBOUGHT", 70.0)
+        val positionSize = params.dbl("POSITION_SIZE_PCT", 2.0)
+
+        if (candles.size < slowPeriod + 1) return StrategySignal.HOLD
+        val fastSma = sma(candles, fastPeriod)
+        val prevFastSma = sma(candles.dropLast(1), fastPeriod)
+        val slowSma = sma(candles, slowPeriod)
+        val prevSlowSma = sma(candles.dropLast(1), slowPeriod)
+        val rsiVal = rsi(candles, rsiPeriod)
+
+        if (prevFastSma <= prevSlowSma && fastSma > slowSma && rsiVal < rsiOverbought)
+            return StrategySignal.BUY(sizePct = positionSize)
+        if (prevFastSma >= prevSlowSma && fastSma < slowSma || rsiVal > rsiOverbought + 5)
+            return StrategySignal.SELL(sizePct = 100.0)
+        return StrategySignal.HOLD
+    }
+
+    private var rsiLastTradeBar = -5
+    private fun evaluateRsiMeanReversion(candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        val rsiPeriod = params.int("RSI_PERIOD", 14)
+        val rsiOversold = params.dbl("RSI_OVERSOLD", 28.0)
+        val rsiOverbought = params.dbl("RSI_OVERBOUGHT", 72.0)
+        val volMultiplier = params.dbl("VOL_MULTIPLIER", 1.5)
+        val cooldownBars = params.int("COOLDOWN_BARS", 5)
+        val positionSize = params.dbl("POSITION_SIZE_PCT", 3.0)
+        val sl = params.dbl("STOP_LOSS_PCT", 2.0)
+        val tp = params.dbl("TAKE_PROFIT_PCT", 4.0)
+
+        if (candles.size < rsiPeriod + 7) return StrategySignal.HOLD
+        val currentBar = candles.size
+        if (currentBar - rsiLastTradeBar < cooldownBars) return StrategySignal.HOLD
+
+        val rsiVal = rsi(candles, rsiPeriod)
+        val avgVolume = candles.takeLast(20).map { it.volume }.average()
+        val currentVolume = candles.last().volume
+        val volumeSpike = currentVolume > avgVolume * volMultiplier
+
+        if (rsiVal < rsiOversold && volumeSpike) {
+            rsiLastTradeBar = currentBar
+            return StrategySignal.BUY(sizePct = positionSize, stopLossPct = sl, takeProfitPct = tp)
+        }
+        if (rsiVal > rsiOverbought) {
+            rsiLastTradeBar = currentBar
+            return StrategySignal.SELL(sizePct = 100.0)
+        }
+        return StrategySignal.HOLD
+    }
+
+    private fun evaluateBollingerBreakout(candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        val bbPeriod = params.int("BB_PERIOD", 20)
+        val bbStdDev = params.dbl("BB_STDDEV", 2.0)
+        val squeezeThreshold = params.dbl("SQUEEZE_THRESHOLD", 0.02)
+        val positionSize = params.dbl("POSITION_SIZE_PCT", 2.5)
+        val sl = params.dbl("STOP_LOSS_PCT", 1.5)
+        val tp = params.dbl("TAKE_PROFIT_PCT", 3.0)
+
+        if (candles.size < bbPeriod + 2) return StrategySignal.HOLD
+        val closes = candles.map { it.close }
+        val smaVal = closes.takeLast(bbPeriod).average()
+        val sd = stdDev(closes.takeLast(bbPeriod))
+        val upper = smaVal + bbStdDev * sd
+        val lower = smaVal - bbStdDev * sd
+
+        val prevCloses = candles.dropLast(1).map { it.close }
+        val prevSma = prevCloses.takeLast(bbPeriod).average()
+        val prevSd = stdDev(prevCloses.takeLast(bbPeriod))
+        val prevBandwidth = (2 * bbStdDev * prevSd) / prevSma
+
+        val wasSqueeze = prevBandwidth < squeezeThreshold
+        val price = candles.last().close
+
+        if (wasSqueeze && price > upper)
+            return StrategySignal.BUY(sizePct = positionSize, stopLossPct = sl, takeProfitPct = tp)
+        if (wasSqueeze && price < lower)
+            return StrategySignal.SELL(sizePct = 100.0)
+        if (price < smaVal && price > lower)
+            return StrategySignal.CLOSE_IF_LONG
+        return StrategySignal.HOLD
+    }
+
+    private fun evaluateMacdMomentum(candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        val fastEma = params.int("FAST_EMA", 12)
+        val slowEma = params.int("SLOW_EMA", 26)
+        val trendPeriod = params.int("TREND_EMA", 200)
+        val positionSize = params.dbl("POSITION_SIZE_PCT", 2.0)
+        val sl = params.dbl("STOP_LOSS_PCT", 2.5)
+        val tp = params.dbl("TAKE_PROFIT_PCT", 5.0)
+
+        if (candles.size < trendPeriod + 1) return StrategySignal.HOLD
+        val macdLine = ema(candles, fastEma) - ema(candles, slowEma)
+        val prevMacdLine = ema(candles.dropLast(1), fastEma) - ema(candles.dropLast(1), slowEma)
+        val histogram = macdLine
+        val prevHistogram = prevMacdLine
+        val trendEma = ema(candles, trendPeriod)
+        val price = candles.last().close
+        val uptrend = price > trendEma
+
+        if (prevHistogram <= 0 && histogram > 0 && uptrend)
+            return StrategySignal.BUY(sizePct = positionSize, stopLossPct = sl, takeProfitPct = tp)
+        if (prevHistogram >= 0 && histogram < 0)
+            return StrategySignal.SELL(sizePct = 100.0)
+        return StrategySignal.HOLD
+    }
+
+    private fun evaluateEmaScalper(candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        val fast = params.int("EMA_FAST", 8)
+        val mid = params.int("EMA_MID", 13)
+        val slow = params.int("EMA_SLOW", 21)
+        val atrPeriod = params.int("ATR_PERIOD", 14)
+        val atrSlMult = params.dbl("ATR_SL_MULT", 1.0)
+        val atrTpMult = params.dbl("ATR_TP_MULT", 1.5)
+        val minAdx = params.dbl("MIN_ADX", 20.0)
+        val positionSize = params.dbl("POSITION_SIZE_PCT", 1.5)
+
+        if (candles.size < slow + 14) return StrategySignal.HOLD
+        val emaFast = ema(candles, fast)
+        val emaMid = ema(candles, mid)
+        val emaSlow = ema(candles, slow)
+        val atrVal = atr(candles, atrPeriod)
+        val adxVal = adx(candles, atrPeriod)
+        val price = candles.last().close
+
+        if (adxVal < minAdx) return StrategySignal.HOLD
+
+        val bullish = emaFast > emaMid && emaMid > emaSlow && price > emaFast
+        val bearish = emaFast < emaMid && emaMid < emaSlow && price < emaFast
+
+        if (bullish)
+            return StrategySignal.BUY(
+                sizePct = positionSize,
+                stopLossPct = if (price > 0) atrVal * atrSlMult / price * 100 else 1.0,
+                takeProfitPct = if (price > 0) atrVal * atrTpMult / price * 100 else 1.5
+            )
+        if (bearish)
+            return StrategySignal.SELL(sizePct = 100.0)
+        return StrategySignal.HOLD
+    }
+
+    // ─── GainzAlgo V2 ─────────────────────────────────────────────
+    private var gainzLastSignal = ""
+
+    private fun evaluateGainzAlgo(candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        val stabilityThreshold = params.dbl("CANDLE_STABILITY_INDEX", 0.5)
+        val rsiUpper = params.dbl("RSI_UPPER", 70.0)
+        val rsiLower = params.dbl("RSI_LOWER", 30.0)
+        val deltaLength = params.int("CANDLE_DELTA_LENGTH", 4)
+        val tpSlMult = params.dbl("TP_SL_MULTIPLIER", 1.0)
+        val rrr = params.dbl("RISK_REWARD_RATIO", 2.0)
+        val positionSize = params.dbl("POSITION_SIZE_PCT", 2.0)
+
+        if (candles.size < deltaLength + 11) return StrategySignal.HOLD
+
+        val last = candles.last()
+        val prev = candles[candles.size - 2]
+        val deltaRef = candles[candles.size - 1 - deltaLength]
+
+        // True range
+        val tr = maxOf(
+            last.high - last.low,
+            Math.abs(last.high - prev.close),
+            Math.abs(last.low - prev.close)
+        )
+
+        // Candle stability index
+        val candleBody = Math.abs(last.close - last.open)
+        val stable = tr > 0.0 && candleBody / tr > stabilityThreshold
+
+        val rsiVal = rsi(candles, 14)
+        val atrVal = atr(candles, 14)
+        val dist = atrVal * tpSlMult
+        val price = last.close
+
+        // ── BUY: bullish engulfing + stable + RSI < upper + price decreased over delta bars
+        val bullishEngulfing = prev.close < prev.open && last.close > last.open && last.close > prev.open
+        val priceDip = last.close < deltaRef.close
+
+        if (bullishEngulfing && stable && rsiVal < rsiUpper && priceDip && gainzLastSignal != "buy") {
+            gainzLastSignal = "buy"
+            val slPct = if (price > 0) dist / price * 100.0 else 2.0
+            val tpPct = slPct * rrr
+            return StrategySignal.BUY(sizePct = positionSize, stopLossPct = slPct, takeProfitPct = tpPct)
+        }
+
+        // ── SELL: bearish engulfing + stable + RSI > lower + price increased over delta bars
+        val bearishEngulfing = prev.close > prev.open && last.close < last.open && last.close < prev.open
+        val priceRise = last.close > deltaRef.close
+
+        if (bearishEngulfing && stable && rsiVal > rsiLower && priceRise && gainzLastSignal != "sell") {
+            gainzLastSignal = "sell"
+            val slPct = if (price > 0) dist / price * 100.0 else 2.0
+            val tpPct = slPct * rrr
+            return StrategySignal.SELL(sizePct = 100.0, stopLossPct = slPct, takeProfitPct = tpPct)
+        }
+
+        return StrategySignal.HOLD
+    }
+
+    private fun evaluateGridTrader(candles: List<Candle>, params: Map<String, String> = emptyMap()): StrategySignal {
+        val levels = params.int("GRID_LEVELS", 10)
+        val rangePct = params.dbl("GRID_RANGE_PCT", 5.0)
+        val sizePerGrid = params.dbl("SIZE_PER_GRID", 0.5)
+        val rebalancePct = params.dbl("REBALANCE_PCT", 6.0)
+
+        if (candles.size < 50) return StrategySignal.HOLD
+        val price = candles.last().close
+        val sma50 = sma(candles, 50)
+        val halfRange = sma50 * (rangePct / 2.0 / 100.0)
+        val gridTop = sma50 + halfRange
+        val gridBottom = sma50 - halfRange
+        val gridStep = (gridTop - gridBottom) / levels
+        val midLevel = levels / 2
+
+        if (price > gridTop * (1.0 + rebalancePct / 100.0)) return StrategySignal.SELL(sizePct = 50.0)
+        if (price < gridBottom * (1.0 - rebalancePct / 100.0)) return StrategySignal.HOLD
+        if (gridStep <= 0) return StrategySignal.HOLD
+
+        val gridLevel = ((price - gridBottom) / gridStep).toInt().coerceIn(0, levels)
+        if (gridLevel < midLevel - 1)
+            return StrategySignal.BUY(sizePct = sizePerGrid * (midLevel - gridLevel), stopLossPct = rangePct)
+        if (gridLevel > midLevel + 1)
+            return StrategySignal.SELL(sizePct = sizePerGrid * (gridLevel - midLevel))
+        return StrategySignal.HOLD
+    }
+
+    // ─── Backtesting engine ─────────────────────────────────────────
+
+    fun backtest(
+        templateId: String,
+        candles: List<Candle>,
+        symbol: String,
+        interval: String,
+        params: Map<String, String> = emptyMap()
+    ): Pair<BacktestResult, List<SignalMarker>> {
+        if (candles.size < 50) return Pair(
+            BacktestResult("", symbol, interval, 0, 0, 0, 0.0, 0.0, 0.0, 0.0),
+            emptyList()
+        )
+
+        val trades = mutableListOf<BacktestTrade>()
+        val signals = mutableListOf<SignalMarker>()
+        var position: BacktestPosition? = null
+        val feePct = 0.001 // 0.1% per trade
+        var equity = 10000.0
+        val equityCurve = mutableListOf(equity)
+        var peakEquity = equity
+
+        // Walk candles one-by-one, evaluating strategy at each bar
+        for (i in 50 until candles.size) {
+            val slice = candles.subList(0, i + 1)
+            val signal = evaluate(templateId, slice, params)
+            val bar = candles[i]
+
+            when (signal) {
+                is StrategySignal.BUY -> {
+                    if (position == null) {
+                        val qty = (equity * signal.sizePct / 100.0) / bar.close
+                        position = BacktestPosition(OrderSide.BUY, bar.close, qty, bar.openTime)
+                        signals.add(SignalMarker(
+                            id = "${symbol}_${bar.openTime}_BUY",
+                            scriptId = "", symbol = symbol, interval = interval,
+                            openTime = bar.openTime, signalType = SignalType.BUY, price = bar.close
+                        ))
+                    }
+                }
+                is StrategySignal.SELL, is StrategySignal.CLOSE_IF_LONG -> {
+                    if (position != null && position.side == OrderSide.BUY) {
+                        val pnl = (bar.close - position.entryPrice) * position.qty
+                        val fee = (position.entryPrice * position.qty + bar.close * position.qty) * feePct
+                        equity += pnl - fee
+                        trades.add(BacktestTrade(
+                            entryTime = position.entryTime, exitTime = bar.openTime,
+                            side = position.side, entryPrice = position.entryPrice,
+                            exitPrice = bar.close, quantity = position.qty,
+                            pnl = pnl, fees = fee
+                        ))
+                        signals.add(SignalMarker(
+                            id = "${symbol}_${bar.openTime}_SELL",
+                            scriptId = "", symbol = symbol, interval = interval,
+                            openTime = bar.openTime, signalType = SignalType.SELL, price = bar.close
+                        ))
+                        position = null
+                    }
+                }
+                else -> { /* HOLD */ }
+            }
+            equityCurve.add(equity)
+            peakEquity = maxOf(peakEquity, equity)
+        }
+
+        // Close any open position at end
+        if (position != null) {
+            val lastBar = candles.last()
+            val pnl = (lastBar.close - position.entryPrice) * position.qty
+            val fee = (position.entryPrice * position.qty + lastBar.close * position.qty) * feePct
+            equity += pnl - fee
+            trades.add(BacktestTrade(
+                entryTime = position.entryTime, exitTime = lastBar.openTime,
+                side = position.side, entryPrice = position.entryPrice,
+                exitPrice = lastBar.close, quantity = position.qty,
+                pnl = pnl, fees = fee
+            ))
+        }
+
+        val totalPnl = equity - 10000.0
+        val winCount = trades.count { it.pnl > 0 }
+        val winRate = if (trades.isNotEmpty()) winCount.toDouble() / trades.size * 100 else 0.0
+        val maxDrawdown = if (equityCurve.isNotEmpty()) {
+            var peak = equityCurve[0]
+            var maxDd = 0.0
+            for (eq in equityCurve) {
+                peak = maxOf(peak, eq)
+                val dd = (peak - eq) / peak * 100
+                maxDd = maxOf(maxDd, dd)
+            }
+            maxDd
+        } else 0.0
+
+        // Sharpe ratio (simplified, annualized assuming daily returns)
+        val returns = equityCurve.zipWithNext().map { (a, b) -> (b - a) / a }
+        val avgReturn = if (returns.isNotEmpty()) returns.average() else 0.0
+        val stdReturn = if (returns.size > 1) stdDev(returns) else 1.0
+        val sharpe = if (stdReturn > 0) avgReturn / stdReturn * Math.sqrt(252.0) else 0.0
+
+        val result = BacktestResult(
+            scriptId = "",
+            symbol = symbol,
+            timeframe = interval,
+            startDate = candles.first().openTime,
+            endDate = candles.last().openTime,
+            totalTrades = trades.size,
+            winRate = winRate,
+            totalPnl = totalPnl,
+            maxDrawdown = maxDrawdown,
+            sharpeRatio = sharpe,
+            trades = trades
+        )
+        return Pair(result, signals)
+    }
+
+    private data class BacktestPosition(
+        val side: OrderSide,
+        val entryPrice: Double,
+        val qty: Double,
+        val entryTime: Long
+    )
+}

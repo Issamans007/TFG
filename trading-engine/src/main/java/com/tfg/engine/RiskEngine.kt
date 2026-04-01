@@ -1,0 +1,281 @@
+package com.tfg.engine
+
+import android.content.Context
+import com.tfg.domain.model.*
+import com.tfg.domain.repository.RiskRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import timber.log.Timber
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class RiskEngine @Inject constructor(
+    @ApplicationContext private val context: Context
+) : RiskRepository {
+
+    private companion object {
+        const val PREFS_NAME = "tfg_risk_engine"
+        const val KEY_KILL_SWITCH = "kill_switch_active"
+        const val KEY_DAILY_LOSS = "daily_loss"
+        const val KEY_CONSECUTIVE_LOSSES = "consecutive_losses"
+        const val KEY_PEAK_EQUITY = "peak_equity"
+        const val KEY_LAST_RESET_DAY = "last_reset_day"
+    }
+
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val _config = MutableStateFlow(RiskConfig())
+    private val _killSwitch = MutableStateFlow(prefs.getBoolean(KEY_KILL_SWITCH, false))
+    private var dailyLoss = prefs.getFloat(KEY_DAILY_LOSS, 0f).toDouble()
+    private var openTradeCount = 0
+    private var consecutiveLosses = prefs.getInt(KEY_CONSECUTIVE_LOSSES, 0)
+    private var peakEquity = prefs.getFloat(KEY_PEAK_EQUITY, 0f).toDouble()
+    private var cachedPortfolio = Portfolio()
+
+    init {
+        // Auto-reset daily counters if the day changed since last save
+        val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
+        val savedDay = prefs.getInt(KEY_LAST_RESET_DAY, -1)
+        if (savedDay != -1 && savedDay != today) {
+            dailyLoss = 0.0
+            consecutiveLosses = 0
+            persistRiskState()
+        }
+    }
+
+    // Observable state for UI
+    private val _dailyLossFlow = MutableStateFlow(0.0)
+    val dailyLossFlow: StateFlow<Double> = _dailyLossFlow.asStateFlow()
+    private val _openTradeCountFlow = MutableStateFlow(0)
+    val openTradeCountFlow: StateFlow<Int> = _openTradeCountFlow.asStateFlow()
+    private val _consecutiveLossesFlow = MutableStateFlow(0)
+    val consecutiveLossesFlow: StateFlow<Int> = _consecutiveLossesFlow.asStateFlow()
+
+    /** Push real portfolio so risk checks use actual balances instead of zeros. */
+    fun updatePortfolio(portfolio: Portfolio) {
+        cachedPortfolio = portfolio
+        updateEquity(portfolio.totalBalance)
+    }
+
+    override fun getRiskConfig(): Flow<RiskConfig> = _config.asStateFlow()
+
+    override suspend fun updateRiskConfig(config: RiskConfig) {
+        _config.value = config
+    }
+
+    override suspend fun checkOrderRisk(order: Order, portfolio: Portfolio): RiskCheckResult {
+        val config = _config.value
+        val violations = mutableListOf<RiskViolation>()
+
+        if (_killSwitch.value) {
+            violations.add(RiskViolation("KILL_SWITCH", "Kill switch is active. All trading halted.", RiskSeverity.EMERGENCY))
+            return RiskCheckResult(false, violations)
+        }
+
+        if (config.emergencyCloseAll) {
+            violations.add(RiskViolation("EMERGENCY", "Emergency close all is active.", RiskSeverity.EMERGENCY))
+            return RiskCheckResult(false, violations)
+        }
+
+        val effectivePrice = order.price
+            ?: order.filledPrice.takeIf { it > 0.0 }
+            ?: order.stopPrice
+            ?: 0.0
+        val orderNotional = order.quantity * effectivePrice
+        val positionSizePercent = if (portfolio.totalBalance > 0) orderNotional / portfolio.totalBalance * 100 else 100.0
+
+        // Max position size check — block if price unknown (market order with no reference)
+        if (effectivePrice <= 0.0 && order.type == OrderType.MARKET) {
+            violations.add(RiskViolation(
+                "MAX_POSITION_SIZE",
+                "Cannot determine position size for market order with unknown price",
+                RiskSeverity.BLOCK
+            ))
+        } else if (positionSizePercent > config.maxPositionSizePercent) {
+            violations.add(RiskViolation(
+                "MAX_POSITION_SIZE",
+                "Position size ${String.format("%.1f", positionSizePercent)}% exceeds limit ${config.maxPositionSizePercent}%",
+                RiskSeverity.BLOCK
+            ))
+        }
+
+        // Max open trades check
+        if (openTradeCount >= config.maxOpenTrades) {
+            violations.add(RiskViolation(
+                "MAX_OPEN_TRADES",
+                "Open trades ($openTradeCount) at limit (${config.maxOpenTrades})",
+                RiskSeverity.BLOCK
+            ))
+        }
+
+        // Daily loss limit check
+        val dailyLossPercent = if (portfolio.totalBalance > 0) kotlin.math.abs(dailyLoss) / portfolio.totalBalance * 100 else 0.0
+        if (dailyLossPercent >= config.dailyLossLimitPercent) {
+            violations.add(RiskViolation(
+                "DAILY_LOSS_LIMIT",
+                "Daily loss ${String.format("%.1f", dailyLossPercent)}% exceeds limit ${config.dailyLossLimitPercent}%",
+                RiskSeverity.BLOCK
+            ))
+        }
+
+        // Max loss per trade check
+        if (order.stopLosses.isNotEmpty() && order.price != null) {
+            val worstSl = order.stopLosses.minByOrNull { it.price }
+            if (worstSl != null) {
+                val orderPrice = order.price ?: 0.0
+                val maxLoss = kotlin.math.abs(orderPrice - worstSl.price) * order.quantity
+                val lossPercent = if (portfolio.totalBalance > 0) maxLoss / portfolio.totalBalance * 100 else 100.0
+                if (lossPercent > config.maxLossPerTradePercent) {
+                    violations.add(RiskViolation(
+                        "MAX_LOSS_PER_TRADE",
+                        "Potential loss ${String.format("%.1f", lossPercent)}% exceeds limit ${config.maxLossPerTradePercent}%",
+                        RiskSeverity.BLOCK
+                    ))
+                }
+            }
+        }
+
+        // Consecutive loss check
+        if (consecutiveLosses >= config.consecutiveLossLimit) {
+            violations.add(RiskViolation(
+                "CONSECUTIVE_LOSSES",
+                "Hit $consecutiveLosses consecutive losses (limit ${config.consecutiveLossLimit})",
+                RiskSeverity.BLOCK
+            ))
+        }
+
+        // Drawdown check
+        if (peakEquity > 0) {
+            val drawdown = (peakEquity - portfolio.totalBalance) / peakEquity * 100
+            if (drawdown >= config.drawdownPausePercent) {
+                violations.add(RiskViolation(
+                    "DRAWDOWN_PAUSE",
+                    "Drawdown ${String.format("%.1f", drawdown)}% exceeds pause threshold ${config.drawdownPausePercent}%",
+                    RiskSeverity.BLOCK
+                ))
+            }
+        }
+
+        // Time-based trading window check (supports overnight windows like 23:00-01:00)
+        if (config.tradingWindowStart != null && config.tradingWindowEnd != null) {
+            val now = java.util.Calendar.getInstance()
+            val currentMinutes = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
+
+            fun parseMinutes(hhmm: String): Int {
+                val parts = hhmm.split(":")
+                return parts[0].toInt() * 60 + parts[1].toInt()
+            }
+
+            val startMinutes = parseMinutes(config.tradingWindowStart!!)
+            val endMinutes = parseMinutes(config.tradingWindowEnd!!)
+
+            val insideWindow = if (startMinutes <= endMinutes) {
+                // Normal window, e.g. 09:00-17:00
+                currentMinutes in startMinutes..endMinutes
+            } else {
+                // Overnight window, e.g. 23:00-01:00
+                currentMinutes >= startMinutes || currentMinutes <= endMinutes
+            }
+
+            if (!insideWindow) {
+                violations.add(RiskViolation(
+                    "TRADING_WINDOW",
+                    "Outside trading window (${config.tradingWindowStart}-${config.tradingWindowEnd})",
+                    RiskSeverity.BLOCK
+                ))
+            }
+        }
+
+        // Weekend check
+        if (!config.weekendTradingEnabled) {
+            val dayOfWeek = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK)
+            if (dayOfWeek == java.util.Calendar.SATURDAY || dayOfWeek == java.util.Calendar.SUNDAY) {
+                violations.add(RiskViolation(
+                    "WEEKEND_TRADING",
+                    "Weekend trading is disabled",
+                    RiskSeverity.BLOCK
+                ))
+            }
+        }
+
+        val hasBlocker = violations.any { it.severity == RiskSeverity.BLOCK || it.severity == RiskSeverity.EMERGENCY }
+        return RiskCheckResult(!hasBlocker, violations)
+    }
+
+    override suspend fun activateKillSwitch() {
+        _killSwitch.value = true
+        prefs.edit().putBoolean(KEY_KILL_SWITCH, true).apply()
+        Timber.w("Kill switch ACTIVATED - all trading halted")
+    }
+
+    override suspend fun deactivateKillSwitch() {
+        _killSwitch.value = false
+        prefs.edit().putBoolean(KEY_KILL_SWITCH, false).apply()
+        Timber.w("Kill switch DEACTIVATED")
+    }
+
+    override fun isKillSwitchActive(): Flow<Boolean> = _killSwitch.asStateFlow()
+
+    fun updateTradeResult(pnl: Double) {
+        dailyLoss += if (pnl < 0) pnl else 0.0
+        _dailyLossFlow.value = dailyLoss
+        if (pnl < 0) consecutiveLosses++ else consecutiveLosses = 0
+        _consecutiveLossesFlow.value = consecutiveLosses
+        persistRiskState()
+    }
+
+    fun updateEquity(equity: Double) {
+        if (equity > peakEquity) {
+            peakEquity = equity
+            persistRiskState()
+        }
+    }
+
+    fun updateOpenTradeCount(count: Int) {
+        openTradeCount = count
+        _openTradeCountFlow.value = count
+    }
+
+    fun resetDailyCounters() {
+        dailyLoss = 0.0
+        consecutiveLosses = 0
+        _dailyLossFlow.value = 0.0
+        _consecutiveLossesFlow.value = 0
+        persistRiskState()
+    }
+
+    private fun persistRiskState() {
+        val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
+        prefs.edit()
+            .putFloat(KEY_DAILY_LOSS, dailyLoss.toFloat())
+            .putInt(KEY_CONSECUTIVE_LOSSES, consecutiveLosses)
+            .putFloat(KEY_PEAK_EQUITY, peakEquity.toFloat())
+            .putInt(KEY_LAST_RESET_DAY, today)
+            .apply()
+    }
+
+    // Alias for backwards compatibility — uses cached real portfolio
+    suspend fun checkPreTrade(order: Order): RiskCheckResult {
+        return checkOrderRisk(order, cachedPortfolio)
+    }
+
+    fun recordTradeResult(order: Order) {
+        val pnl = order.realizedPnl
+        // Skip recording when PnL is zero (order just placed, not yet settled)
+        if (pnl == 0.0) return
+        updateTradeResult(pnl)
+        Timber.d("Recorded trade result: ${order.id}, PnL: $pnl")
+    }
+
+    fun recordLoss(order: Order) {
+        val pnl = order.realizedPnl
+        if (pnl < 0) {
+            updateTradeResult(pnl)
+            Timber.w("Recorded loss: ${order.id}, PnL: $pnl")
+        }
+    }
+}

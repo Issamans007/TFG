@@ -1,0 +1,109 @@
+Critical
+1. Missing DB Migration 2→3 → Silent Data Loss
+Migrations exist for 1→2, 3→4, 4→5, 5→6, 6→7 — but not 2→3. Combined with fallbackToDestructiveMigration(), any user upgrading from DB v2 to v3 will have their entire local database (orders, scripts, balances, signals, audit logs) silently wiped.
+
+2. Risk Counters Lost on Process Death
+RiskEngine stores dailyLoss, consecutiveLosses, peakEquity as in-memory variables. If Android kills the process (normal behavior for background apps), all risk state resets to zero. A user who lost 4% today would think they lost 0% after the process restarts, and the daily loss limiter wouldn't block any further trades.
+
+3. Certificate Pinning is a Placeholder
+NetworkModule has sha256/AAAA... — a dummy pin. MITM attacks on the Binance API connection are possible. API keys and trade requests can be intercepted on compromised networks.
+
+4. Offline Queue Never Serializes Anything
+OfflineQueueRepositoryImpl has 6 TODOs. enqueue() stores signalJson = null and orderJson = null. When the queue drains after reconnection, it reads back empty items. Orders queued during offline periods are permanently lost.
+
+High
+5. JS RSI Uses Wrong Algorithm
+The RSI in JS_INDICATOR_LIBRARY uses a simple period average, not Wilder's exponential smoothing. The Kotlin StrategyEvaluator.rsi() uses the correct Wilder method. The same candles produce different RSI values depending on whether the user runs a built-in template (Kotlin) or custom JS code — the signals will differ.
+
+6. JS MACD Fast EMA Skips Bars
+The fast EMA is seeded at candle index fast-1 but the update loop starts at index slow. For 14 bars (slow - fast with defaults 26/12), the fast EMA isn't updated — producing a stale MACD line.
+
+7. QuickJS Instance Not Thread-Safe
+ScriptEngine caches one QuickJS instance and reuses it. If two coroutines call execute() concurrently (e.g., backtest + live evaluation), the shared C runtime can produce undefined behavior or crashes. The @Synchronized on getOrCreateJs() doesn't protect the evaluate() calls.
+
+8. runBlocking on Main Thread
+TradingForegroundService.stopTrading() uses runBlocking inside onDestroy(). If the audit log write is slow, the app freezes (ANR).
+
+9. Signal HMAC Verification Never Invoked
+SecurityModule implements HMAC signature verification for incoming signals, but SignalRepositoryImpl never calls it. Signals from the TFG server are trusted without any cryptographic verification.
+
+10. WakeLock Without Timeout
+The foreground service acquires a PARTIAL_WAKE_LOCK without a timeout. If the service crashes without calling release(), the wake lock leaks and drains the battery.
+
+11. SMA Crossover Sell — Operator Precedence Bug
+if (pfSma >= psSma && fSma < sSma || r > rsiOb + 5) — because && binds tighter than ||, this fires SELL whenever RSI > 75 even if the SMA is still bullish. Any RSI spike in an uptrend closes the position.
+
+
+
+13. Candle Table Duplicates
+CandleEntity uses @PrimaryKey(autoGenerate = true) — an auto-increment integer. This means the same candle (same symbol+interval+openTime) can be inserted multiple times. The table grows unbounded with duplicates over time.
+
+14. No Room Indices
+orders.status, orders.symbol, candles.symbol+interval, signals.status are all filtered in WHERE clauses but have no @Index. Query performance degrades as data grows.
+
+15. N+1 API Calls in Order Monitoring
+TradeExecutor.monitorOpenOrders() calls binanceApi.get24hrTicker(symbol) individually for every open order inside the 1-second loop. With 5 open orders that's 5 API calls per second — Binance rate limit (1200/min) is consumed fast.
+
+16. exportCsv() Hangs
+AnalyticsRepositoryImpl.exportCsv() uses Flow.collect{} on a Room Flow (which never completes). The function hangs indefinitely instead of returning. Should use .first().
+
+17. AlertMonitor Silent Failure
+If the WebSocket disconnects, tickerFlow stops emitting, and alerts silently stop working. There's no fallback (REST polling) and no user notification that alerts aren't being checked.
+
+18. Script Memory Exhaustion
+QuickJS has no memory cap. A script with var x=[]; while(true) x.push(new Array(1000)) will OOM-crash the process before the 5-second timeout fires.
+
+19. No Confirmed-Candle Guard
+PineScript uses barstate.isconfirmed. The StrategyRunner does filter on kline.isFinal, which is correct — but the ScriptScreen preview and backtester may evaluate on partial candles.
+
+20. EvalContext Not Reset on Strategy Restart
+lastSignalType persists across deactivate/reactivate cycles, blocking the first signal of the same type after restart.
+
+21. SharedPreferences Unbounded Growth — Trailing-stop peak prices are stored per order ID and never cleaned after order closes.
+22. SimpleDateFormat Not Thread-Safe — Used in formatters, unsafe across coroutines.
+23. Constants Mismatch — Constants.WS_RECONNECT_MAX_DELAY = 30000L but WebSocketManager uses maxDelay = 60000L.
+24. Orphan Backtest Scripts — Every backtest run creates "run_${timestamp}" script entries that are never deleted.
+25. BootReceiver Always Starts Bot — No check for user's preference before starting the service on device boot.
+
+
+PART 2: IMPROVEMENTS TO EXISTING FEATURES
+Trading Engine
+Persist risk state to Room — dailyLoss, consecutiveLosses, peakEquity should survive process death
+Batch ticker API calls — Instead of N calls for N orders, use get24hrTickers() (single call, all symbols) and filter locally
+Add circuit breaker to reconnect logic — After 20 failed attempts, notify the user instead of silently giving up
+Add memory limit to QuickJS — Use QuickJS's memory limit API to cap script memory at ~16MB
+Add script execution metrics — Track how long each evaluation takes, log slow scripts
+Indicator Accuracy
+Fix JS RSI to use Wilder's RMA — Match PineScript and the Kotlin implementation
+Fix JS MACD fast EMA initialization — Loop from fast to slow before the main loop
+Fix Kotlin atr() to use Wilder smoothing — Currently uses simple average, should use RMA
+Fix HullMA — Add the missing final WMA(result, sqrt(period)) step
+Unify Kotlin and JS indicator math — Both should produce identical results for the same input
+Backtesting
+Add compounding mode — Currently uses a fixed entry amount; real traders compound
+Add slippage simulation — The Order.slippage field exists but is never populated
+Add commission impact — Deduct estimated fees from PnL during backtest
+Add walk-forward analysis — Split data into in-sample/out-of-sample periods
+Script System
+Allow scripts to plot on the chart — The partial indicator() parsing exists in CoinDetailViewModel but only supports 3 indicator types and never sends data to the WebView. Wire up the full pipeline: script returns plots[] → engine parses → chart renders via existing addOverlay()/addSubIndicator()
+Add script debugging console — Let users see console.log() output from their JS scripts
+Add script versioning — Let users save multiple versions of a script and compare backtest results
+Risk Engine
+Add correlation limit enforcement — RiskConfig.correlationLimit exists but is never checked
+Add Fear & Greed Index enforcement — RiskConfig.fearGreedPauseBelow/Above exists but is never checked against MarketData.fearGreedIndex
+Add per-symbol exposure tracking — symbolExposureLimitPercent exists but isn't enforced
+Debounce the "Place Order" button — Prevent duplicate orders from rapid taps
+Move heavy indicator computations off the UI thread — buildOverlayList and buildSubIndicatorList run in remember() blocks during recomposition
+
+
+
+Data:
+Use composite primary key for candles — symbol + interval + openTime instead of auto-increment to prevent duplicates
+Add Room indices — On orders(status, symbol), candles(symbol, interval), signals(status)
+Clean up orphan data — Trailing-stop peak prices, executed TP levels, backtest scripts
+
+
+Nice-to-Have Features:
+16. Widget / Watch Complication — Android home screen widget showing current PnL and active strategy status
+17. Dark/Light Theme — Currently hardcoded dark theme; add theme switching
+24. Replay Mode — Step through historical candles bar-by-bar viewing strategy decisions in real time (visual backtesting)

@@ -1,0 +1,525 @@
+Build a production-grade Android application called TradeForGood using Kotlin.
+
+GOAL:
+Create a mobile-first crypto trading platform that combines:
+1) Binance Spot trading automation
+2) local autonomous trading agent
+3) NGO donation funding from profits
+4) custom on-device scripting engine
+5) secure background execution
+6) portfolio + analytics dashboard
+
+TECH STACK:
+- Kotlin 1.9+
+- Jetpack Compose
+- MVVM + Clean Architecture
+- Repository Pattern
+- Hilt Dependency Injection
+- Coroutines + Flow + StateFlow
+- Room Database
+- Retrofit + OkHttp
+- OkHttp WebSocket
+- Android Keystore
+- BiometricPrompt
+- WorkManager
+- Foreground Service
+- TradingView Lightweight Charts in WebView
+- Monaco Editor in WebView
+- J2V8 scripting engine
+- Firebase Crashlytics + Analytics
+- Coil
+- JUnit5 + Espresso + MockK
+
+MIN SDK:
+- API 26+
+
+TARGET SDK:
+- API 34+
+
+==================================================
+CORE APP MODULES
+==================================================
+
+Generate these modules:
+
+:app
+:core
+:feature-auth
+:feature-dashboard
+:feature-markets
+:feature-trade
+:feature-chart
+:feature-script
+:feature-portfolio
+:feature-settings
+:feature-risk
+:feature-notifications
+:data-local
+:data-remote
+:domain
+:trading-engine
+:security
+:blockchain
+
+==================================================
+ARCHITECTURE
+==================================================
+
+Use strict clean architecture:
+
+presentation/
+- compose screens
+- reusable components
+- viewmodels
+- state reducers
+- ui events
+- navigation graph
+
+domain/
+- models
+- use cases
+- repositories interfaces
+- risk policies
+- strategy execution contracts
+
+data/
+- dto
+- mappers
+- repositories implementation
+- room dao
+- websocket source
+- retrofit services
+- local cache
+
+service/
+- TradingForegroundService
+- SignalReceiver
+- TradeExecutor
+- RiskManager
+- ConnectionStateMachine
+- OfflineRecoveryManager
+- HeartbeatManager
+- NotificationDispatcher
+
+==================================================
+MAIN FEATURES
+==================================================
+
+1) AUTH FLOW
+- splash
+- onboarding
+- login
+- register
+- OTP verification
+- KYC flow
+- API key setup
+- biometric setup
+- 6-digit trading PIN
+
+2) DASHBOARD
+- total portfolio
+- daily pnl
+- open positions
+- active signals
+- latest executed trades
+- donation stats
+- bot state indicator
+
+3) MARKETS
+- list of symbols
+- watchlist
+- fear greed index
+- BTC dominance
+- signal badges
+- pair search
+- pull to refresh
+
+4) CHART
+- TradingView chart inside WebView
+- multiple timeframes
+- indicators toggle
+- buy/sell markers
+- TP/SL lines
+- historical trade markers
+- drawing tools
+
+5) TRADE HUB
+- market / limit / stop orders
+- TP/SL
+- trailing stop
+- donation preview
+- PIN confirmation
+- order history
+- quick close
+- manual / bot / script modes
+
+5.1) ADVANCED ORDER TYPES
+- OCO (One-Cancels-Other) orders
+- Bracket orders (entry + TP + SL simultaneously)
+- Conditional orders (if-then triggers)
+- Time-based orders (execute at specific time)
+- Trailing stop orders (dynamic SL adjustment)
+- Scale orders (split order into multiple fills)
+- Post-only orders (maker fees only)
+
+5.2) PAPER TRADING / DEMO MODE
+- fully functional simulated trading with virtual money
+- no real funds at risk
+- identical UI/UX to live trading
+- historical backtesting against past data
+- dry-run mode to test strategies risk-free
+- performance metrics same as live trading
+- switch between demo ↔ live accounts seamlessly
+- paper trading profit/loss calculations
+- demo account reset capability
+- optional randomized slippage simulation for realism
+- trading history export from demo trades
+
+6) SIGNAL FEED
+- server signals via websocket
+- confidence score
+- expiry
+- risk reward ratio
+- prefilled order execution
+
+7) SCRIPT ENGINE
+Create custom TradeScript language similar to Pine Script:
+- ta.rsi
+- ta.macd
+- ta.ema
+- ta.sma
+- crossover
+- crossunder
+- strategy.entry
+- strategy.exit
+- portfolio.balance
+- alert.create
+- plot helpers
+
+Run locally on device using J2V8.
+Provide:
+- Monaco Editor screen
+- syntax highlighting
+- autocomplete
+- inline errors
+- templates
+- on-device backtest
+- deploy live mode
+
+8) PORTFOLIO
+- allocation pie chart
+- pnl charts
+- asset list
+- best/worst trade
+- win rate
+- mode comparison
+
+9) SETTINGS
+- bot config
+- daily loss limit
+- max position size
+- theme
+- language
+- trust center
+- active sessions
+- API revoke
+- replace API key
+- Telegram alerts
+
+==================================================
+BACKGROUND TRADING ENGINE
+==================================================
+
+Build robust foreground service:
+
+TradingForegroundService:
+- runs 24/7
+- survives screen lock
+- survives app close
+- self-recovers after process death
+- restarts after device reboot
+
+Components:
+- WebSocketManager
+- TradeExecutor
+- RiskLoop
+- CandleCache
+- ScriptRunner
+- ReconnectManager
+- EmergencyCloseManager
+
+Connection states:
+CONNECTED
+RECONNECTING
+AUTONOMOUS
+EMERGENCY
+PAUSED
+
+Behavior:
+- exponential reconnect retry
+- local SL/TP monitoring every 1s
+- trailing stop updates
+- offline autonomous trade management
+- emergency close all positions
+- duplicate signal protection
+- idempotent execution using signalId
+- local vs Binance reconciliation
+- self-healing after crash
+
+==================================================
+OFFLINE SYNC STRATEGY
+==================================================
+
+Handle device internet disconnections gracefully:
+
+Scenario: Device disconnects from internet
+- Local trade queue buffers all signals received while offline
+- Timestamp all local trades with device time
+- Cache order status locally (pending execution)
+- Monitor SL/TP locally without server confirmation
+- Close positions locally if emergency triggered
+
+Signal Handling While Offline:
+- Store incoming signals in local SQLite queue
+- Missed signals (arrived while offline) can be:
+  * EXECUTED: If still valid (check expiry timestamp) when reconnected
+  * SKIPPED: If signal expired during offline period
+  * BATCHED: Multiple signals processed together on reconnect
+- User config: auto-accept or manual-review missed signals on reconnect
+
+Conflict Resolution on Reconnection:
+- Compare local position state vs server state
+- If local > server: position was closed server-side, revert locally
+- If server > local: missed signals executed by server, sync order history
+- If divergent: log conflict, notify user, prompt manual resolution
+- Idempotent execution: signalId prevents duplicate trades
+- Sync order history after each reconnect
+
+Local Trade Queue Management:
+- Priority queue: SL/TP orders > new entry signals
+- Maximum queue size: prevent memory overflow
+- Persistent storage: don't lose trades if app crashes
+- Retry mechanism: exponential backoff to push queued trades
+- Dead letter queue: store failed trades for manual review
+
+Network Recovery:
+- Detect reconnection via connectivity manager
+- Auto-drain local queue when online
+- Verify Binance API connectivity before execution
+- Notify user of sync status (pending, syncing, synced)
+
+==================================================
+RISK MANAGEMENT
+==================================================
+
+Implement professional risk controls:
+- daily loss limit
+- max position size
+- max open trades
+- symbol exposure limit
+- correlation protection
+- slippage check
+- spread protection
+- break-even stop logic
+- volatility pause
+- emergency close all
+- kill switch support
+- per-strategy limits
+
+==================================================
+ADVANCED RISK CONTROLS
+==================================================
+
+Enhanced risk safeguards:
+- drawdown-based trading pause (auto-pause if equity drops X%)
+- time-based trading windows (only trade during specified hours)
+- sentiment-based filters (pause trading during extreme fear/greed)
+- consecutive loss limit (stop after N losing trades)
+- max loss per trade (percentage of account)
+- correlation-based position limit (don't hold correlated assets)
+- liquidity check (reject orders on low-volume pairs)
+- price spike detection (reject orders during >X% moves)
+- margin call prevention (maintain minimum equity ratio)
+- weekend/holiday trading toggle
+
+Implement professional risk controls:
+- daily loss limit
+- max position size
+- max open trades
+- symbol exposure limit
+- correlation protection
+- slippage check
+- spread protection
+- break-even stop logic
+- volatility pause
+- emergency close all
+- kill switch support
+- per-strategy limits
+
+==================================================
+SECURITY
+==================================================
+
+Implement enterprise-grade mobile security:
+- Android Keystore encrypted API keys
+- keys never leave device
+- biometric lock
+- 6-digit trading PIN
+- root detection
+- emulator detection
+- certificate pinning
+- screenshot prevention
+- API permission validator
+- HMAC signal verification
+- anti-tamper checks
+- Play Integrity API support
+- debugger detection
+- hook framework detection
+- no withdrawal permission validation
+
+==================================================
+FEES LOGIC
+==================================================
+
+Accurate fee calculation & tracking:
+- Binance trading fee (0.1% default, reduced with BNB/VIP tiers)
+- Donation fee (% of profit donated to NGO)
+- Premium feature fee (if freemium model)
+- Withdrawal fee (network fees for crypto transfers)
+- Per-order fee breakdown display
+- Fee impact on profit/loss calculations
+- Fee history & tax reporting export
+- Fee tiers based on 30-day trading volume
+- Discount on fees if using BNB for payment
+- Real-time fee estimation before order submission
+
+==================================================
+COMPREHENSIVE ANALYTICS
+==================================================
+
+Professional-grade performance metrics:
+
+Core Metrics:
+- total return % & amount
+- win rate % (winning trades / total trades)
+- profit factor (gross profit / gross loss)
+- Sharpe ratio (risk-adjusted returns)
+- Sortino ratio (downside risk adjustment)
+- Calmar ratio (return / max drawdown)
+- max drawdown % (biggest peak-to-trough decline)
+- average trade duration
+- average win / average loss (risk reward ratio)
+- payoff ratio (avg win size / avg loss size)
+
+Detailed Breakdowns:
+- performance by pair (which assets most profitable)
+- performance by strategy / script (compare different bots)
+- performance by time period (daily, weekly, monthly, yearly)
+- performance by entry signal type (manual vs bot vs script vs server signal)
+- trading activity chart (trades per day/week/month)
+- daily PnL chart (cumulative returns over time)
+- equity curve (account balance over time)
+- drawdown chart (visualize largest losses)
+- correlation analysis (how assets move together)
+- best/worst trade analysis
+- win/loss streaks (consecutive wins/losses)
+- commission impact analysis
+
+Comparison Features:
+- compare 2 strategies side-by-side
+- backtesting results vs live performance
+- demo trading vs live trading comparison
+- performance vs benchmark (BTC, market index)
+
+Export & Reporting:
+- PDF performance report generation
+- CSV export of all trades
+- tax reporting (cost basis, gains/losses)
+- monthly performance summaries
+- trading journal export
+
+==================================================
+AUDIT & COMPLIANCE
+==================================================
+
+Enterprise-grade audit trail & regulatory compliance:
+
+Detailed Audit Logs:
+- timestamp of every trade (entry & exit)
+- full order details (pair, quantity, price, type, fees)
+- who executed (manual/bot/script/server signal)
+- API calls to Binance (endpoint, parameters, response)
+- configuration changes (with before/after values)
+- user logins & logouts
+- API key generation / revocation
+- withdrawal requests & confirmations
+- funds deposits
+- all PIN entries (time & attempt count)
+- biometric authentication events
+- app crashes & errors with stack traces
+
+Transaction History:
+- complete trade ledger with timestamps
+- order ID, trade ID, execution price, slippage
+- commission paid per trade
+- net profit/loss per trade
+- cumulative PnL
+- export transaction history in standard formats
+
+Compliance Features:
+- KYC verification status & date
+- trading volume tracking (for regulatory reporting)
+- tax lot reporting (cost basis per trade)
+- Form 8949 export (for US tax filing)
+- GDPR data export capability
+- account deletion with log retention
+- country-specific trading restrictions
+- regulatory disclaimer acceptance tracking
+- AML (Anti-Money Laundering) alerts on high-value trades
+
+Data Retention:
+- keep all audit logs for minimum 7 years
+- encrypted storage in local database
+- optional cloud backup of audit logs
+- compliance with regional data protection laws
+
+==================================================
+DELIVERABLES
+==================================================
+
+
+Generate:
+1) full Android Studio project structure
+2) Gradle files
+3) navigation graph
+4) Room entities + DAO
+5) Retrofit services
+6) Binance repository
+7) foreground service implementation
+8) websocket manager
+9) Compose screens
+10) ViewModels
+11) reusable UI components
+12) risk engine
+13) script engine
+14) test examples
+15) README with setup steps
+16) sample .env configuration
+17) clean package structure
+18) dependency versions catalog
+19) CI workflow example
+20) proguard rules
+
+CODE QUALITY:
+- production-level Kotlin
+- SOLID principles
+- no placeholder pseudo code
+- real compile-ready code
+- scalable folder structure
+- highly modular
+- optimized for maintainability
+
+note:
+app recieve signals from socket Connection, user choose in app what pairs to trade then it follow with the server signals with these pair, 
+one open order pair coin.
+multi take profits and stop loss points pair order
