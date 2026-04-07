@@ -523,3 +523,124 @@ note:
 app recieve signals from socket Connection, user choose in app what pairs to trade then it follow with the server signals with these pair, 
 one open order pair coin.
 multi take profits and stop loss points pair order
+
+==================================================
+IMPLEMENTED FEATURES — UX & QUALITY OF LIFE
+==================================================
+
+22) CRYPTO NEWS AGGREGATOR (feature-news module)
+- New bottom-nav tab "News" with Newspaper icon (6 tabs total)
+- Aggregates from 5 free sources (no API keys):
+  • CoinDesk (RSS feed)
+  • CoinTelegraph (RSS feed)
+  • Reddit r/CryptoCurrency (JSON API)
+  • Reddit r/Bitcoin (JSON API)
+  • CryptoCompare (public JSON API)
+- Pro UI features:
+  • Hero/featured card with image background + gradient overlay
+  • Source filter chips (horizontal scroll, colored per source)
+  • Search bar with animated toggle
+  • Bookmark system (in-memory, per-session)
+  • Pull-to-refresh
+  • Time-ago formatting (2h ago, 3d ago, etc.)
+  • Source badges with brand colors
+  • Empty/error states with retry
+- Architecture:
+  • NewsFeedRepository — OkHttp + XmlPullParser for RSS, Gson for JSON
+  • NewsViewModel — Hilt-injected, filters by source/search/bookmarks
+  • NewsModule — Hilt DI module providing repository singleton
+- Files:
+  domain/src/main/java/com/tfg/domain/model/NewsArticle.kt
+  feature-news/build.gradle.kts
+  feature-news/src/main/java/com/tfg/feature/news/NewsScreen.kt
+  feature-news/src/main/java/com/tfg/feature/news/NewsViewModel.kt
+  feature-news/src/main/java/com/tfg/feature/news/data/NewsFeedRepository.kt
+  feature-news/src/main/java/com/tfg/feature/news/di/NewsModule.kt
+- Navigation: Routes.NEWS = "news", BottomNavItem.NEWS (position 3 of 6)
+
+23) EDITOR SCROLL ARROWS
+- CodeMirror WebView editor has floating up/down arrow buttons (right side)
+- Single tap scrolls one step (80px), long-press for continuous scrolling
+- Arrows fade when at top/bottom boundary
+- Works via touch events (touchstart/touchend), no two-finger scroll needed
+- Dark + light themed auto-matching with the editor theme
+- File: core/src/main/assets/monaco_editor.html
+
+23) HOME SCREEN WIDGET
+- Android AppWidget showing: Daily PnL (colored), Bot active/off status,
+  Active strategy name, Open positions count, Last updated time
+- Updates every 30 seconds from TradingForegroundService monitoring loop
+- Tap widget opens the app (PendingIntent → MainActivity)
+- Data persisted via SharedPreferences (survives process death)
+- 3x2 target cell size, resizable horizontal + vertical
+- Dark glass-morphism background with rounded corners
+- Files:
+  - app/src/main/java/com/tfg/widget/TradingWidgetProvider.kt
+  - app/src/main/res/layout/widget_trading.xml
+  - app/src/main/res/xml/widget_trading_info.xml
+  - app/src/main/res/drawable/widget_background.xml
+  - app/src/main/res/drawable/widget_status_bg.xml
+  - Registered in AndroidManifest.xml as <receiver>
+
+24) CUSTOMIZABLE DASHBOARD (DRAG-AND-DROP CARDS)
+- Dashboard cards: Portfolio Overview, Quick Stats, Risk Metrics,
+  Recent Signals, Open Positions, PnL Chart, Bot Status, Donation Progress
+- Toggle each card visible/hidden via checkboxes
+- Reorder cards with up/down arrows in customization panel
+- Card order + visibility persisted to SharedPreferences
+- Customize toggle button in dashboard header
+- DashboardCardType enum + DashboardCardConfig model in domain module
+- LazyColumn rendering for smooth scrolling with large card lists
+- Files:
+  - domain/src/main/java/com/tfg/domain/model/DashboardCardConfig.kt
+  - feature-dashboard DashboardScreen.kt (full rewrite with card system)
+  - feature-dashboard DashboardViewModel.kt (card config load/save/toggle/move)
+
+25) HAPTIC FEEDBACK
+- Distinct vibration patterns for different trading events:
+  - Order filled: double-tap (50ms, 80ms gap, 50ms)
+  - Stop loss hit: heavy single pulse (200ms)
+  - Take profit hit: triple light tap (40ms × 3)
+  - Emergency close: long buzz (300ms, 100ms gap, 300ms)
+- Global enable/disable in Settings → Haptic Feedback
+- Integrated at TradeExecutor level: executeOrder(), checkTakeProfits(),
+  checkStopLosses(), checkTrailingStop(), closeAllPositions()
+- Works on API 26+ with VibrationEffect, fallback for older devices
+- Files:
+  - core/src/main/java/com/tfg/core/util/HapticManager.kt
+  - trading-engine/src/main/java/com/tfg/engine/TradeHaptics.kt
+  - TradeExecutor.kt (haptic calls added at 5 event points)
+
+26) SOUND ALERTS
+- Configurable sounds for 4 event types:
+  - Order Filled (default: Chime)
+  - Stop Loss Hit (default: Error tone)
+  - Take Profit Hit (default: Success tone)
+  - Alert/Notification (default: Alert Tone)
+- 7 sound options: None, Chime, Beep, Ding, Alert Tone, Success, Error
+- Uses Android ToneGenerator (zero asset files, works out of the box)
+- Per-event sound picker with preview/play button in Settings
+- Global enable/disable toggle
+- Settings UI: dropdown picker with playback preview for each event
+- Files:
+  - core/src/main/java/com/tfg/core/util/SoundManager.kt
+  - trading-engine/src/main/java/com/tfg/engine/TradeSounds.kt
+  - TradeExecutor.kt (sound calls alongside haptic calls)
+  - SettingsScreen.kt + SettingsViewModel.kt (sound config UI)
+
+27) LIGHT THEME + MATERIAL YOU DYNAMIC COLORS
+- Full dark/light/system theme support:
+  - Dark: Dracula-inspired palette (#0D1117 bg, #58A6FF primary)
+  - Light: GitHub-inspired palette (#F6F8FA bg, #0969DA primary)
+  - System: follows device setting + Material You on Android 12+
+- Material You (Android 12+): dynamicDarkColorScheme / dynamicLightColorScheme
+  extracts colors from user's wallpaper for primary/secondary/tertiary
+- ThemeState global mutableStateOf for reactive re-composition
+- Dynamic color getters: DarkCard, TextPrimary, etc. resolve at read-time
+- All UI components use theme-aware colors (no hardcoded dark values)
+- CodeMirror editor syncs theme via setTheme(isDark) JS bridge
+- Settings → Appearance shows "System uses Material You on Android 12+"
+- Files:
+  - core/src/main/java/com/tfg/core/ui/theme/Theme.kt (dynamicColor param)
+  - core/src/main/java/com/tfg/core/ui/theme/Color.kt (ThemeState + dynamic getters)
+  - core/src/main/assets/monaco_editor.html (dual CSS themes)

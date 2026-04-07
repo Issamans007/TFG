@@ -29,6 +29,11 @@ class ConnectionStateMachine @Inject constructor(
     val state: StateFlow<EngineConnectionState> = _state
 
     private var reconnectRequested = false
+    private var lastReconnectAttemptMs = 0L
+
+    companion object {
+        private const val RECONNECT_RETRY_MS = 30_000L // retry after 30s if still disconnected
+    }
 
     fun updateSignalWs(status: ConnectionStatus) {
         _state.value = _state.value.copy(signalWs = status)
@@ -56,7 +61,14 @@ class ConnectionStateMachine @Inject constructor(
         } else if (s.binanceWs == ConnectionStatus.DISCONNECTED && !reconnectRequested) {
             Timber.w("WS disconnected with internet - triggering reconnect")
             reconnectRequested = true
+            lastReconnectAttemptMs = System.currentTimeMillis()
             webSocketManager.reconnectAll()
+        } else if (s.binanceWs == ConnectionStatus.DISCONNECTED && reconnectRequested) {
+            // Previous reconnect failed — reset flag after backoff so next state update can retry
+            if (System.currentTimeMillis() - lastReconnectAttemptMs > RECONNECT_RETRY_MS) {
+                Timber.w("Reconnect still disconnected after backoff - allowing retry")
+                reconnectRequested = false
+            }
         } else if (s.binanceWs == ConnectionStatus.CONNECTED) {
             reconnectRequested = false
         }

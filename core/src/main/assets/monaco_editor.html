@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<!-- CodeMirror 5 — lightweight, fast, offline-friendly -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/hint/show-hint.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;overflow:hidden;}
+#editor{width:100%;height:100%;position:relative;overflow:hidden;}
+
+/* ─── TFG Dark theme (Dracula-inspired) ─────────────────────── */
+body.tfg-dark{background:#1C2333;}
+body.tfg-dark .CodeMirror{background:#1C2333;color:#E6EDF3;height:100%;}
+body.tfg-dark .CodeMirror-gutters{background:#161B22;border-right:1px solid #30363D;}
+body.tfg-dark .CodeMirror-linenumber{color:#6E7681;}
+body.tfg-dark .CodeMirror-cursor{border-left:2px solid #58A6FF;}
+body.tfg-dark .CodeMirror-selected{background:#58A6FF33 !important;}
+body.tfg-dark .CodeMirror-activeline-background{background:#161B2260;}
+body.tfg-dark .CodeMirror-matchingbracket{color:#50FA7B !important;border-bottom:1px solid #50FA7B;}
+body.tfg-dark .cm-keyword{color:#FF79C6;font-weight:bold;}
+body.tfg-dark .cm-def{color:#50FA7B;}
+body.tfg-dark .cm-variable{color:#E6EDF3;}
+body.tfg-dark .cm-variable-2{color:#8BE9FD;}
+body.tfg-dark .cm-property{color:#50FA7B;}
+body.tfg-dark .cm-operator{color:#FF79C6;}
+body.tfg-dark .cm-number{color:#BD93F9;}
+body.tfg-dark .cm-string{color:#F1FA8C;}
+body.tfg-dark .cm-string-2{color:#F1FA8C;}
+body.tfg-dark .cm-comment{color:#6272A4;font-style:italic;}
+body.tfg-dark .cm-atom{color:#BD93F9;}
+body.tfg-dark .cm-type{color:#8BE9FD;}
+body.tfg-dark .cm-builtin{color:#50FA7B;}
+body.tfg-dark .cm-tag{color:#FF79C6;}
+body.tfg-dark .cm-error-line{background:rgba(255,85,85,0.08);}
+/* Autocomplete hints */
+body.tfg-dark .CodeMirror-hints{background:#161B22;border:1px solid #30363D;color:#E6EDF3;font-size:12px;max-height:200px;z-index:1000;}
+body.tfg-dark .CodeMirror-hint{padding:4px 8px;border-radius:0;}
+body.tfg-dark .CodeMirror-hint-active{background:#58A6FF33;color:#E6EDF3;}
+/* Scrollbar */
+body.tfg-dark .CodeMirror-vscrollbar::-webkit-scrollbar{width:6px;}
+body.tfg-dark .CodeMirror-vscrollbar::-webkit-scrollbar-track{background:transparent;}
+body.tfg-dark .CodeMirror-vscrollbar::-webkit-scrollbar-thumb{background:#30363D;border-radius:3px;}
+
+/* ─── TFG Light theme ───────────────────────────────────────── */
+body.tfg-light{background:#F6F8FA;}
+body.tfg-light .CodeMirror{background:#FFFFFF;color:#1F2328;height:100%;}
+body.tfg-light .CodeMirror-gutters{background:#F6F8FA;border-right:1px solid #D0D7DE;}
+body.tfg-light .CodeMirror-linenumber{color:#8C959F;}
+body.tfg-light .CodeMirror-cursor{border-left:2px solid #0969DA;}
+body.tfg-light .CodeMirror-selected{background:#0969DA22 !important;}
+body.tfg-light .CodeMirror-activeline-background{background:#F6F8FA80;}
+body.tfg-light .CodeMirror-matchingbracket{color:#1A7F37 !important;border-bottom:1px solid #1A7F37;}
+body.tfg-light .cm-keyword{color:#CF222E;font-weight:bold;}
+body.tfg-light .cm-def{color:#8250DF;}
+body.tfg-light .cm-variable{color:#1F2328;}
+body.tfg-light .cm-variable-2{color:#0550AE;}
+body.tfg-light .cm-property{color:#0550AE;}
+body.tfg-light .cm-operator{color:#CF222E;}
+body.tfg-light .cm-number{color:#0550AE;}
+body.tfg-light .cm-string{color:#0A3069;}
+body.tfg-light .cm-string-2{color:#0A3069;}
+body.tfg-light .cm-comment{color:#6E7781;font-style:italic;}
+body.tfg-light .cm-atom{color:#0550AE;}
+body.tfg-light .cm-type{color:#8250DF;}
+body.tfg-light .cm-builtin{color:#1A7F37;}
+body.tfg-light .cm-tag{color:#CF222E;}
+body.tfg-light .cm-error-line{background:rgba(207,34,46,0.06);}
+body.tfg-light .CodeMirror-hints{background:#FFFFFF;border:1px solid #D0D7DE;color:#1F2328;font-size:12px;max-height:200px;z-index:1000;}
+body.tfg-light .CodeMirror-hint{padding:4px 8px;}
+body.tfg-light .CodeMirror-hint-active{background:#0969DA22;color:#1F2328;}
+body.tfg-light .CodeMirror-vscrollbar::-webkit-scrollbar{width:6px;}
+body.tfg-light .CodeMirror-vscrollbar::-webkit-scrollbar-track{background:transparent;}
+body.tfg-light .CodeMirror-vscrollbar::-webkit-scrollbar-thumb{background:#D0D7DE;border-radius:3px;}
+
+/* Error banner */
+.error-banner{position:fixed;bottom:0;left:0;right:0;padding:4px 8px;background:#FF555533;color:#FF5555;font-size:11px;font-family:'Fira Code',monospace;display:none;z-index:100;border-top:1px solid #FF555555;}
+
+/* ─── Scroll arrows overlay ─────────────────────────────────────── */
+.scroll-arrows{position:fixed;right:6px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;z-index:200;}
+.scroll-btn{width:32px;height:32px;border:none;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0.7;transition:opacity 0.2s;touch-action:manipulation;-webkit-tap-highlight-color:transparent;font-size:16px;line-height:1;}
+.scroll-btn:active{opacity:1;transform:scale(0.92);}
+body.tfg-dark .scroll-btn{background:#30363Dcc;color:#E6EDF3;}
+body.tfg-dark .scroll-btn:active{background:#58A6FF55;}
+body.tfg-light .scroll-btn{background:#D0D7DEcc;color:#1F2328;}
+body.tfg-light .scroll-btn:active{background:#0969DA33;}
+</style>
+</head>
+<body class="tfg-dark">
+<div id="editor"></div>
+<div class="error-banner" id="error-banner"></div>
+<div class="scroll-arrows" id="scroll-arrows">
+  <button class="scroll-btn" id="scroll-up" aria-label="Scroll up">&#9650;</button>
+  <button class="scroll-btn" id="scroll-down" aria-label="Scroll down">&#9660;</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/javascript/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/selection/active-line.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/hint/show-hint.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/hint/javascript-hint.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/fold/foldcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/fold/foldgutter.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/fold/brace-fold.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/addon/fold/comment-fold.min.js"></script>
+<script>
+(function() {
+  'use strict';
+
+  // ─── TFG Strategy built-in functions ─────────────────────────────
+  var tfgFunctions = [
+    // Indicators
+    'sma','ema','wma','vwma','dema','tema','hma','lsma','kama','alma',
+    'rsi','stoch','stochRsi','cci','williamsR',
+    'macd','macdSignal','macdHist',
+    'bbUpper','bbMiddle','bbLower','bbWidth','percentB',
+    'atr','adx','plusDI','minusDI','supertrend',
+    'ichimokuTenkan','ichimokuKijun','ichimokuSenkouA','ichimokuSenkouB',
+    'obv','mfi','cmf','vwap','ad','adOsc','emv',
+    'psar','aroonUp','aroonDown','donchianHigh','donchianLow','keltnerUpper','keltnerLower',
+    'pivotHigh','pivotLow','fibLevel',
+    // Series
+    'smaSeries','emaSeries','wmaSeries','vwmaSeries','hmaSeries','demaSeries','temaSeries',
+    'rsiSeries','atrSeries','adxSeries','cciSeries','mfiSeries',
+    'williamsRSeries','cmfSeries','obvSeries','vwapSeries',
+    'bollingerSeries','macdSeries','stochasticSeries','stochasticRsiSeries',
+    'supertrendSeries','ichimokuSeries','linregSeries',
+    // Utilities
+    'crossover','crossunder','highest','lowest','change','roc','mom',
+    'linreg','stddev','variance','correlation','tr','sum','cum',
+    'source','input','plot','hline','fill','bgcolor','label',
+    // Signals
+    'buy','sell','closeLong','closeShort','hold'
+  ];
+
+  var tfgGlobals = ['_candles','_params','_state','_account','barIndex','barCount',
+    'close','open','high','low','volume','hl2','hlc3','ohlc4',
+    'account','strategy','console','Math'];
+
+  // Documentation for hints
+  var fnDocs = {
+    sma:'sma(period) — Simple Moving Average',
+    ema:'ema(period) — Exponential Moving Average',
+    wma:'wma(period) — Weighted Moving Average',
+    vwma:'vwma(period) — Volume Weighted Moving Average',
+    dema:'dema(period) — Double EMA',
+    tema:'tema(period) — Triple EMA',
+    hma:'hma(period) — Hull Moving Average',
+    rsi:'rsi(period) — Relative Strength Index (0-100)',
+    macd:'macd(fast, slow) — MACD line',
+    macdSignal:'macdSignal(fast, slow, sig) — MACD signal line',
+    macdHist:'macdHist(fast, slow, sig) — MACD histogram',
+    bbUpper:'bbUpper(period, mult) — Bollinger upper band',
+    bbMiddle:'bbMiddle(period) — Bollinger middle (SMA)',
+    bbLower:'bbLower(period, mult) — Bollinger lower band',
+    atr:'atr(period) — Average True Range',
+    adx:'adx(period) — Average Directional Index',
+    stoch:'stoch(kPeriod, dPeriod) — Stochastic %K',
+    stochRsi:'stochRsi(rsiPeriod, stochPeriod) — Stochastic RSI',
+    cci:'cci(period) — Commodity Channel Index',
+    williamsR:'williamsR(period) — Williams %R (-100 to 0)',
+    supertrend:'supertrend(period, mult) — Supertrend (+1/-1)',
+    obv:'obv() — On Balance Volume',
+    mfi:'mfi(period) — Money Flow Index',
+    cmf:'cmf(period) — Chaikin Money Flow',
+    vwap:'vwap() — Volume Weighted Average Price',
+    psar:'psar(step, max) — Parabolic SAR',
+    crossover:'crossover(a, b) — true when a crosses above b',
+    crossunder:'crossunder(a, b) — true when a crosses below b',
+    highest:'highest(period) — Highest high of last N bars',
+    lowest:'lowest(period) — Lowest low of last N bars',
+    change:'change(value, period) — Difference vs N bars ago',
+    roc:'roc(period) — Rate of change %',
+    buy:'buy(sizePct, options) — BUY signal, options: {tp, sl}',
+    sell:'sell(sizePct, options) — SELL signal',
+    closeLong:'closeLong() — Close long position',
+    closeShort:'closeShort() — Close short position',
+    hold:'hold() — Do nothing (hold position)',
+    input:'input(name, default, opts) — User-configurable param',
+    plot:'plot(name, value, opts) — Plot on chart'
+  };
+
+  var tfgSet = {};
+  tfgFunctions.forEach(function(f){ tfgSet[f] = true; });
+  tfgGlobals.forEach(function(g){ tfgSet[g] = true; });
+
+  // ─── Create CodeMirror editor ────────────────────────────────────
+  var editor = CodeMirror(document.getElementById('editor'), {
+    value: '',
+    mode: 'javascript',
+    lineNumbers: true,
+    tabSize: 2,
+    indentWithTabs: false,
+    lineWrapping: true,
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    styleActiveLine: true,
+    foldGutter: true,
+    gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+    extraKeys: {
+      'Ctrl-Space': function(cm) { cm.showHint({ hint: tfgHint, completeSingle: false }); },
+      'Tab': function(cm) {
+        if (cm.somethingSelected()) cm.indentSelection('add');
+        else cm.replaceSelection('  ', 'end');
+      }
+    }
+  });
+
+  // Auto-show hints while typing
+  editor.on('inputRead', function(cm, change) {
+    if (change.text[0] && /[a-zA-Z_]/.test(change.text[0])) {
+      cm.showHint({ hint: tfgHint, completeSingle: false });
+    }
+  });
+
+  // ─── Custom autocomplete ─────────────────────────────────────────
+  function tfgHint(cm) {
+    var cur = cm.getCursor();
+    var tok = cm.getTokenAt(cur);
+    var word = tok.string;
+    if (tok.type === 'comment' || tok.type === 'string') return;
+    var startCh = tok.start;
+
+    var allWords = tfgFunctions.concat(tfgGlobals);
+    var matches = [];
+    if (word.length >= 1) {
+      var lower = word.toLowerCase();
+      allWords.forEach(function(w) {
+        if (w.toLowerCase().indexOf(lower) === 0) {
+          matches.push({
+            text: w,
+            displayText: fnDocs[w] || w,
+            className: tfgFunctions.indexOf(w) >= 0 ? 'cm-builtin' : ''
+          });
+        }
+      });
+    }
+
+    if (matches.length === 0) return;
+    return {
+      list: matches,
+      from: CodeMirror.Pos(cur.line, startCh),
+      to: CodeMirror.Pos(cur.line, cur.ch)
+    };
+  }
+
+  // ─── Validation (bracket + JS syntax) ────────────────────────────
+  var errorBanner = document.getElementById('error-banner');
+  var errorWidgets = [];
+
+  function clearErrors() {
+    errorWidgets.forEach(function(w) { editor.removeLineClass(w.line, 'background', 'cm-error-line'); });
+    errorWidgets = [];
+    errorBanner.style.display = 'none';
+  }
+
+  function validateCode(code) {
+    clearErrors();
+    var errors = [];
+    var lines = code.split('\n');
+
+    // Bracket matching
+    var stack = [];
+    var matchMap = { ')':'(', '}':'{', ']':'[' };
+    for (var i = 0; i < lines.length; i++) {
+      for (var j = 0; j < lines[i].length; j++) {
+        var ch = lines[i][j];
+        if (ch === '(' || ch === '{' || ch === '[') {
+          stack.push({ char: ch, line: i });
+        } else if (ch === ')' || ch === '}' || ch === ']') {
+          if (stack.length === 0 || stack[stack.length - 1].char !== matchMap[ch]) {
+            errors.push({ line: i, msg: 'Unmatched "' + ch + '"' });
+          } else {
+            stack.pop();
+          }
+        }
+      }
+    }
+    stack.forEach(function(item) {
+      errors.push({ line: item.line, msg: 'Unmatched "' + item.char + '"' });
+    });
+
+    // JS syntax check
+    try { new Function(code); }
+    catch (e) {
+      var lineMatch = e.message.match(/line (\d+)/i) || (e.stack && e.stack.match(/:(\d+):/));
+      var errLine = lineMatch ? Math.min(parseInt(lineMatch[1]) - 1, lines.length - 1) : 0;
+      if (errLine < 0) errLine = 0;
+      errors.push({ line: errLine, msg: e.message });
+    }
+
+    errors.forEach(function(err) {
+      editor.addLineClass(err.line, 'background', 'cm-error-line');
+      errorWidgets.push({ line: err.line });
+    });
+
+    if (errors.length > 0) {
+      errorBanner.textContent = errors.length + ' error(s): ' + errors[0].msg;
+      errorBanner.style.display = 'block';
+    }
+    return errors.length;
+  }
+
+  // Debounced validation + notify Android
+  var validateTimer;
+  var ignoreNextChange = false;
+
+  editor.on('change', function() {
+    if (ignoreNextChange) { ignoreNextChange = false; return; }
+    clearTimeout(validateTimer);
+    validateTimer = setTimeout(function() {
+      var code = editor.getValue();
+      validateCode(code);
+      if (window.Android) window.Android.onCodeChanged(code);
+    }, 500);
+  });
+
+  // ─── Bridge: Android → JS ────────────────────────────────────────
+  window.setCode = function(code) {
+    ignoreNextChange = true;
+    editor.setValue(code);
+    clearErrors();
+    setTimeout(function() { editor.refresh(); }, 50);
+  };
+
+  window.getCode = function() {
+    return editor.getValue();
+  };
+
+  window.setReadOnly = function(readOnly) {
+    editor.setOption('readOnly', readOnly);
+  };
+
+  window.setTheme = function(dark) {
+    document.body.className = dark ? 'tfg-dark' : 'tfg-light';
+    setTimeout(function() { editor.refresh(); }, 50);
+  };
+
+  // Notify Android that editor is ready
+  if (window.Android) window.Android.onEditorReady();
+
+  // CodeMirror needs a refresh once the container is properly laid out
+  // Use ResizeObserver for reliable resize detection inside WebView
+  function doRefresh() { try { editor.refresh(); } catch(e){} }
+  setTimeout(doRefresh, 50);
+  setTimeout(doRefresh, 200);
+  setTimeout(doRefresh, 600);
+  setTimeout(doRefresh, 1500);
+
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(function() { setTimeout(doRefresh, 10); })
+      .observe(document.getElementById('editor'));
+  }
+  window.addEventListener('resize', function() { setTimeout(doRefresh, 10); });
+
+  // ─── Scroll arrows ──────────────────────────────────────────────
+  var scrollStep = 80; // pixels per tap
+  var scrollInterval = null;
+
+  function scrollEditor(direction) {
+    var info = editor.getScrollInfo();
+    editor.scrollTo(null, info.top + (direction * scrollStep));
+  }
+
+  function startScroll(direction) {
+    scrollEditor(direction);
+    scrollInterval = setInterval(function() { scrollEditor(direction); }, 120);
+  }
+  function stopScroll() {
+    if (scrollInterval) { clearInterval(scrollInterval); scrollInterval = null; }
+  }
+
+  var upBtn = document.getElementById('scroll-up');
+  var downBtn = document.getElementById('scroll-down');
+
+  // Touch: long-press to continuous scroll, tap for single step
+  upBtn.addEventListener('touchstart', function(e) { e.preventDefault(); startScroll(-1); }, {passive:false});
+  upBtn.addEventListener('touchend', stopScroll);
+  upBtn.addEventListener('touchcancel', stopScroll);
+  downBtn.addEventListener('touchstart', function(e) { e.preventDefault(); startScroll(1); }, {passive:false});
+  downBtn.addEventListener('touchend', stopScroll);
+  downBtn.addEventListener('touchcancel', stopScroll);
+
+  // Mouse fallback
+  upBtn.addEventListener('mousedown', function() { startScroll(-1); });
+  downBtn.addEventListener('mousedown', function() { startScroll(1); });
+  document.addEventListener('mouseup', stopScroll);
+
+  // Show/hide arrows based on scroll position
+  function updateArrowVisibility() {
+    var info = editor.getScrollInfo();
+    upBtn.style.opacity = info.top <= 0 ? '0.25' : '0.7';
+    downBtn.style.opacity = (info.top + info.clientHeight >= info.height - 2) ? '0.25' : '0.7';
+  }
+  editor.on('scroll', updateArrowVisibility);
+  setTimeout(updateArrowVisibility, 300);
+})();
+</script>
+</body>
+</html>

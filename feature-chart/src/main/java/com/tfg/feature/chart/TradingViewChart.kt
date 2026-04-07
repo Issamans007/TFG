@@ -1,6 +1,7 @@
 package com.tfg.feature.chart
 
 import android.annotation.SuppressLint
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -177,6 +178,10 @@ fun TradingViewChart(
         modifier = modifier,
         factory = { context ->
             WebView(context).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = true
@@ -205,13 +210,17 @@ fun TradingViewChart(
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         isReady = true
+                        // Force re-layout so the chart renders at correct size
+                        view?.requestLayout()
                     }
                 }
                 loadUrl("file:///android_asset/chart.html")
                 webView = this
             }
         },
-        update = { /* updates handled by LaunchedEffects above */ }
+        update = { view ->
+            view.requestLayout()
+        }
     )
 }
 

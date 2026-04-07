@@ -147,6 +147,21 @@ fun PortfolioScreen(
 
 @Composable
 private fun OverviewTab(state: PortfolioUiState) {
+    // Allocation pie chart
+    state.portfolio?.balances?.filter { it.usdValue > 0.01 }?.let { assets ->
+        if (assets.isNotEmpty()) {
+            SectionHeader(title = "Allocation")
+            AllocationPieChart(
+                assets = assets,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(220.dp)
+                    .padding(horizontal = 16.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+
     // Equity curve chart
     if (state.equityCurve.isNotEmpty()) {
         SectionHeader(title = "Equity Curve")
@@ -393,5 +408,111 @@ private fun EquityChart(points: List<EquityPoint>, modifier: Modifier = Modifier
             color = if (isPositive) Green500 else Red500,
             style = Stroke(width = 2.dp.toPx())
         )
+    }
+}
+
+// ─── Allocation Pie Chart ───────────────────────────────────────────────
+
+private val PieColors = listOf(
+    AccentBlue, AccentGold, AccentPurple, AccentOrange,
+    Green400, Red400, Color(0xFF8BE9FD), Color(0xFF50FA7B),
+    Color(0xFFFF79C6), Color(0xFFBD93F9), Color(0xFFF1FA8C), Color(0xFF6272A4)
+)
+
+@Composable
+private fun AllocationPieChart(
+    assets: List<com.tfg.domain.model.AssetBalance>,
+    modifier: Modifier = Modifier
+) {
+    val totalValue = assets.sumOf { it.usdValue }
+    if (totalValue <= 0) return
+
+    val sorted = assets.sortedByDescending { it.usdValue }
+    // Group small slices (<2%) into "Other"
+    val threshold = totalValue * 0.02
+    val mainSlices = sorted.filter { it.usdValue >= threshold }
+    val otherValue = sorted.filter { it.usdValue < threshold }.sumOf { it.usdValue }
+
+    data class Slice(val label: String, val value: Double, val color: Color)
+
+    val slices = buildList {
+        mainSlices.forEachIndexed { i, a ->
+            add(Slice(a.asset, a.usdValue, PieColors[i % PieColors.size]))
+        }
+        if (otherValue > 0.01) {
+            add(Slice("Other", otherValue, DarkBorder))
+        }
+    }
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(DarkCard)
+            .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Pie
+        Canvas(modifier = Modifier.size(140.dp)) {
+            val diameter = size.minDimension
+            val strokeWidth = 28.dp.toPx()
+            val topLeft = Offset(
+                (size.width - diameter) / 2f + strokeWidth / 2f,
+                (size.height - diameter) / 2f + strokeWidth / 2f
+            )
+            val arcSize = androidx.compose.ui.geometry.Size(
+                diameter - strokeWidth,
+                diameter - strokeWidth
+            )
+            var startAngle = -90f
+            slices.forEach { slice ->
+                val sweep = (slice.value / totalValue * 360.0).toFloat()
+                drawArc(
+                    color = slice.color,
+                    startAngle = startAngle,
+                    sweepAngle = sweep,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Butt)
+                )
+                startAngle += sweep
+            }
+        }
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        // Legend
+        Column(modifier = Modifier.weight(1f)) {
+            slices.take(6).forEach { slice ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(slice.color)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        slice.label,
+                        fontSize = 12.sp,
+                        color = TextPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${String.format("%.1f", slice.value / totalValue * 100)}%",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                }
+            }
+            if (slices.size > 6) {
+                Text("+ ${slices.size - 6} more", fontSize = 11.sp, color = TextTertiary,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
+        }
     }
 }

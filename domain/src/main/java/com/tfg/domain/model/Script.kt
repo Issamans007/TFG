@@ -51,6 +51,7 @@ data class BacktestResult(
     val totalPnl: Double,
     val maxDrawdown: Double,
     val sharpeRatio: Double,
+    val sortinoRatio: Double = 0.0,
     val trades: List<BacktestTrade> = emptyList(),
     val profitFactor: Double = 0.0,
     val buyAndHoldReturn: Double = 0.0,
@@ -82,6 +83,89 @@ data class BacktestTrade(
     val fees: Double,
     val barsInTrade: Int = 0
 )
+
+/** Export backtest results as CSV text (C5). */
+fun BacktestResult.toCsv(): String {
+    val df = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+    val sb = StringBuilder()
+    // Summary section
+    sb.appendLine("# Backtest Report")
+    sb.appendLine("Symbol,$symbol")
+    sb.appendLine("Timeframe,$timeframe")
+    sb.appendLine("Period,${df.format(java.util.Date(startDate))} - ${df.format(java.util.Date(endDate))}")
+    sb.appendLine("Total Trades,$totalTrades")
+    sb.appendLine("Win Rate,${String.format("%.2f", winRate)}%")
+    sb.appendLine("Total PnL,${String.format("%.2f", totalPnl)}")
+    sb.appendLine("Max Drawdown,${String.format("%.2f", maxDrawdown)}%")
+    sb.appendLine("Sharpe,${String.format("%.2f", sharpeRatio)}")
+    sb.appendLine("Sortino,${String.format("%.2f", sortinoRatio)}")
+    sb.appendLine("Profit Factor,${if (profitFactor == Double.MAX_VALUE) "Inf" else String.format("%.2f", profitFactor)}")
+    sb.appendLine("Expectancy,${String.format("%.2f", expectancy)}")
+    sb.appendLine("Buy & Hold,${String.format("%.2f", buyAndHoldReturn)}%")
+    sb.appendLine()
+    // Trades section
+    sb.appendLine("EntryTime,ExitTime,Side,EntryPrice,ExitPrice,Quantity,PnL,Fees,BarsInTrade")
+    trades.forEach { t ->
+        sb.appendLine("${df.format(java.util.Date(t.entryTime))},${df.format(java.util.Date(t.exitTime))},${t.side},${t.entryPrice},${t.exitPrice},${t.quantity},${String.format("%.4f", t.pnl)},${String.format("%.4f", t.fees)},${t.barsInTrade}")
+    }
+    return sb.toString()
+}
+
+/** C4: Monte Carlo simulation result — confidence intervals on equity outcomes. */
+data class MonteCarloResult(
+    val simulations: Int,
+    val medianFinalEquity: Double,
+    val p5FinalEquity: Double,
+    val p95FinalEquity: Double,
+    val medianMaxDrawdown: Double,
+    val p5MaxDrawdown: Double,       // worst-case (higher DD)
+    val p95MaxDrawdown: Double       // best-case (lower DD)
+)
+
+/** Run Monte Carlo simulation by shuffling trade PnLs. */
+fun BacktestResult.runMonteCarlo(simulations: Int = 1000): MonteCarloResult {
+    if (trades.isEmpty()) return MonteCarloResult(simulations, startingCapital, startingCapital, startingCapital, 0.0, 0.0, 0.0)
+    val pnls = trades.map { it.pnl }
+    val random = java.util.Random(42)
+    val finalEquities = mutableListOf<Double>()
+    val maxDrawdowns = mutableListOf<Double>()
+
+    repeat(simulations) {
+        val shuffled = pnls.toMutableList().also { list ->
+            for (i in list.indices.reversed()) {
+                val j = random.nextInt(i + 1)
+                val tmp = list[i]; list[i] = list[j]; list[j] = tmp
+            }
+        }
+        var equity = startingCapital
+        var peak = equity
+        var maxDd = 0.0
+        for (pnl in shuffled) {
+            equity += pnl
+            peak = maxOf(peak, equity)
+            val dd = if (peak > 0) (peak - equity) / peak * 100.0 else 0.0
+            maxDd = maxOf(maxDd, dd)
+        }
+        finalEquities.add(equity)
+        maxDrawdowns.add(maxDd)
+    }
+
+    finalEquities.sort()
+    maxDrawdowns.sort()
+    fun percentile(sorted: List<Double>, p: Double): Double {
+        val idx = (p / 100.0 * (sorted.size - 1)).toInt().coerceIn(0, sorted.size - 1)
+        return sorted[idx]
+    }
+    return MonteCarloResult(
+        simulations = simulations,
+        medianFinalEquity = percentile(finalEquities, 50.0),
+        p5FinalEquity = percentile(finalEquities, 5.0),
+        p95FinalEquity = percentile(finalEquities, 95.0),
+        medianMaxDrawdown = percentile(maxDrawdowns, 50.0),
+        p5MaxDrawdown = percentile(maxDrawdowns, 95.0),   // 95th percentile of DD = worst case
+        p95MaxDrawdown = percentile(maxDrawdowns, 5.0)    // 5th percentile of DD = best case
+    )
+}
 
 /** Persisted signal marker for chart overlay */
 data class SignalMarker(

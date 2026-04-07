@@ -63,6 +63,7 @@ dependencies {
     implementation(project(":feature-risk"))
     implementation(project(":feature-notifications"))
     implementation(project(":feature-alerts"))
+    implementation(project(":feature-news"))
 
     // Core Android
     implementation(libs.androidx.core.ktx)

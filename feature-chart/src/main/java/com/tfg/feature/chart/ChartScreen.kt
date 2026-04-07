@@ -12,7 +12,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -147,9 +150,13 @@ fun CoinDetailScreen(
                 .height(chartHeightDp)
         ) {
             if (state.candles.isNotEmpty() || !state.isLoading) {
+                val displayCandles = if (state.replayMode)
+                    state.candles.take(state.replayBarIndex + 1) else state.candles
+                val displaySignals = if (state.replayMode)
+                    state.replaySignals else state.signalMarkers
                 TradingViewChart(
-                    candles = state.candles,
-                    signals = state.signalMarkers,
+                    candles = displayCandles,
+                    signals = displaySignals,
                     overlayIndicators = overlayIndicators,
                     subIndicators = subIndicators,
                     livePrice = state.ticker?.price,
@@ -343,6 +350,220 @@ fun CoinDetailScreen(
                 Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp), tint = AccentPurple)
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Custom Indicator", fontSize = 11.sp, color = AccentPurple)
+            }
+        }
+
+        // ─── Replay Mode & Buy/Hold Comparison Controls ────────────
+        if (!state.replayMode) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (state.backtestResult != null) {
+                    // Replay button — only after backtest
+                    TextButton(
+                        onClick = { viewModel.enterReplayMode() },
+                    ) {
+                        Icon(Icons.Default.Replay, null, modifier = Modifier.size(16.dp), tint = AccentOrange)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Replay Mode", fontSize = 11.sp, color = AccentOrange)
+                    }
+                    // Buy & Hold comparison button
+                    TextButton(
+                        onClick = { viewModel.toggleBuyAndHoldComparison() },
+                    ) {
+                        Icon(Icons.Default.CompareArrows, null, modifier = Modifier.size(16.dp), tint = AccentBlue)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            if (state.showBuyAndHoldComparison) "Hide Compare" else "Compare B&H",
+                            fontSize = 11.sp, color = AccentBlue
+                        )
+                    }
+                } else {
+                    Text("Run a backtest to unlock Replay & Compare", fontSize = 10.sp, color = TextTertiary,
+                        modifier = Modifier.padding(horizontal = 8.dp))
+                }
+            }
+        } else {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = DarkCard,
+                tonalElevation = 4.dp
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Replay, null, modifier = Modifier.size(16.dp), tint = AccentOrange)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Replay", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AccentOrange)
+                        }
+                        Text(
+                            "Bar ${state.replayBarIndex + 1} / ${state.candles.size}",
+                            fontSize = 11.sp, color = TextSecondary
+                        )
+                        TextButton(onClick = { viewModel.exitReplayMode() }) {
+                            Text("Exit", fontSize = 11.sp, color = Red400)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    // Progress slider
+                    Slider(
+                        value = state.replayBarIndex.toFloat(),
+                        onValueChange = { viewModel.seekReplay(it.toInt()) },
+                        valueRange = 1f..(state.candles.size - 1).toFloat().coerceAtLeast(2f),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = AccentOrange,
+                            activeTrackColor = AccentOrange,
+                            inactiveTrackColor = DarkBorder
+                        )
+                    )
+                    // Playback controls
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { viewModel.replayStepBack() }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Default.SkipPrevious, "Step Back", tint = TextPrimary)
+                        }
+                        IconButton(
+                            onClick = {
+                                if (state.replayPlaying) viewModel.replayPause()
+                                else viewModel.replayPlay()
+                            },
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                if (state.replayPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                "Play/Pause",
+                                tint = AccentOrange,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        IconButton(onClick = { viewModel.replayStepForward() }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Default.SkipNext, "Step Forward", tint = TextPrimary)
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        // Speed selector
+                        val speeds = listOf(1000L to "1x", 500L to "2x", 250L to "4x", 100L to "10x")
+                        speeds.forEach { (ms, label) ->
+                            val selected = state.replaySpeedMs == ms
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 2.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (selected) AccentOrange.copy(alpha = 0.2f) else Color.Transparent)
+                                    .clickable { viewModel.setReplaySpeed(ms) }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    label, fontSize = 10.sp,
+                                    color = if (selected) AccentOrange else TextTertiary,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                    // Signal count
+                    if (state.replaySignals.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val buys = state.replaySignals.count { it.signalType == SignalType.BUY }
+                        val sells = state.replaySignals.count { it.signalType == SignalType.SELL }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Text("Signals: ", fontSize = 10.sp, color = TextTertiary)
+                            Text("$buys BUY", fontSize = 10.sp, color = Green400)
+                            Text("  •  ", fontSize = 10.sp, color = TextTertiary)
+                            Text("$sells SELL", fontSize = 10.sp, color = Red400)
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Buy & Hold Comparison Chart ────────────────────────────
+        if (state.showBuyAndHoldComparison && state.strategyEquityCurve.isNotEmpty() && state.buyAndHoldEquityCurve.isNotEmpty()) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = DarkCard,
+                tonalElevation = 4.dp
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text("Strategy vs Buy & Hold", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(modifier = Modifier.size(10.dp).background(AccentBlue, RoundedCornerShape(2.dp)))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Strategy", fontSize = 10.sp, color = TextSecondary)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(modifier = Modifier.size(10.dp).background(AccentOrange, RoundedCornerShape(2.dp)))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Buy & Hold", fontSize = 10.sp, color = TextSecondary)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .background(Color(0xFF0D0D1A), RoundedCornerShape(6.dp))
+                            .padding(8.dp)
+                    ) {
+                        val strat = state.strategyEquityCurve
+                        val bh = state.buyAndHoldEquityCurve
+                        val allVals = strat + bh
+                        val minVal = allVals.minOrNull() ?: 0.0
+                        val maxVal = allVals.maxOrNull() ?: 1.0
+                        val range = (maxVal - minVal).coerceAtLeast(0.001)
+                        val w = size.width
+                        val h = size.height
+
+                        fun drawCurve(data: List<Double>, color: androidx.compose.ui.graphics.Color) {
+                            if (data.size < 2) return
+                            val path = androidx.compose.ui.graphics.Path()
+                            for (i in data.indices) {
+                                val x = w * i / (data.size - 1).coerceAtLeast(1)
+                                val y = h - (h * ((data[i] - minVal) / range)).toFloat()
+                                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                            }
+                            drawPath(path, color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
+                        }
+                        drawCurve(strat, androidx.compose.ui.graphics.Color(0xFF4FC3F7))
+                        drawCurve(bh, androidx.compose.ui.graphics.Color(0xFFFFA726))
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    val stratReturn = if (state.strategyEquityCurve.size >= 2)
+                        ((state.strategyEquityCurve.last() - state.strategyEquityCurve.first()) / state.strategyEquityCurve.first() * 100) else 0.0
+                    val bhReturn = if (state.buyAndHoldEquityCurve.size >= 2)
+                        ((state.buyAndHoldEquityCurve.last() - state.buyAndHoldEquityCurve.first()) / state.buyAndHoldEquityCurve.first() * 100) else 0.0
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        Text("Strategy: ${String.format("%.2f", stratReturn)}%", fontSize = 11.sp, color = if (stratReturn >= 0) Green400 else Red400)
+                        Text("B&H: ${String.format("%.2f", bhReturn)}%", fontSize = 11.sp, color = if (bhReturn >= 0) Green400 else Red400)
+                        Text(
+                            "Alpha: ${String.format("%.2f", stratReturn - bhReturn)}%",
+                            fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                            color = if (stratReturn >= bhReturn) Green400 else Red400
+                        )
+                    }
+                }
             }
         }
 
@@ -742,7 +963,138 @@ private fun ChartScriptPanel(
                         }
                     }
                 }
+
+                // Backtest vs Live comparison
+                if (result.equityCurve.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    TextButton(onClick = { viewModel.toggleBacktestComparison() }) {
+                        Icon(Icons.Default.CompareArrows, null, modifier = Modifier.size(14.dp),
+                            tint = AccentPurple)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            if (state.showBacktestComparison) "Hide Comparison" else "Compare vs Buy & Hold",
+                            fontSize = 11.sp, color = AccentPurple
+                        )
+                    }
+
+                    if (state.showBacktestComparison) {
+                        BacktestComparisonChart(
+                            backtestEquity = result.equityCurve,
+                            liveEquity = state.liveEquityCurve,
+                            startingCapital = result.startingCapital,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                                .padding(top = 4.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        // Summary metrics
+                        val btReturn = if (result.startingCapital > 0)
+                            ((result.equityCurve.lastOrNull() ?: result.startingCapital) - result.startingCapital) / result.startingCapital * 100.0
+                        else 0.0
+                        val bhReturn = if (state.liveEquityCurve.isNotEmpty() && result.startingCapital > 0)
+                            (state.liveEquityCurve.last() - result.startingCapital) / result.startingCapital * 100.0
+                        else 0.0
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(8.dp).background(AccentBlue, RoundedCornerShape(2.dp)))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Strategy", fontSize = 10.sp, color = TextSecondary)
+                                }
+                                Text(
+                                    "${String.format("%+.1f", btReturn)}%",
+                                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                    color = if (btReturn >= 0) Green400 else Red400
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(8.dp).background(AccentGold, RoundedCornerShape(2.dp)))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Buy & Hold", fontSize = 10.sp, color = TextSecondary)
+                                }
+                                Text(
+                                    "${String.format("%+.1f", bhReturn)}%",
+                                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                    color = if (bhReturn >= 0) Green400 else Red400
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Alpha", fontSize = 10.sp, color = TextSecondary)
+                                Text(
+                                    "${String.format("%+.1f", btReturn - bhReturn)}%",
+                                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                    color = if (btReturn - bhReturn >= 0) Green400 else Red400
+                                )
+                            }
+                        }
+                    }
+                }
             }
+        }
+    }
+}
+
+// ─── Backtest vs Live Comparison Chart ──────────────────────────────
+
+@Composable
+private fun BacktestComparisonChart(
+    backtestEquity: List<Double>,
+    liveEquity: List<Double>,
+    startingCapital: Double,
+    modifier: Modifier = Modifier
+) {
+    if (backtestEquity.size < 2) return
+
+    val allValues = backtestEquity + liveEquity
+    val minVal = allValues.minOrNull() ?: 0.0
+    val maxVal = allValues.maxOrNull() ?: 0.0
+    val range = if (maxVal - minVal > 0) maxVal - minVal else 1.0
+
+    Canvas(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(DarkCard)
+            .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+            .padding(8.dp)
+    ) {
+        val w = size.width
+        val h = size.height
+
+        // Starting capital reference line
+        val baselineY = h - ((startingCapital - minVal) / range * h).toFloat()
+        drawLine(
+            color = Color(0xFF30363D),
+            start = Offset(0f, baselineY),
+            end = Offset(w, baselineY),
+            strokeWidth = 1f,
+            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(6f, 4f))
+        )
+
+        // Draw backtest equity (blue)
+        val btPath = Path()
+        val btStep = w / (backtestEquity.size - 1)
+        backtestEquity.forEachIndexed { i, eq ->
+            val x = i * btStep
+            val y = h - ((eq - minVal) / range * h).toFloat()
+            if (i == 0) btPath.moveTo(x, y) else btPath.lineTo(x, y)
+        }
+        drawPath(btPath, color = Color(0xFF58A6FF), style = Stroke(width = 2.dp.toPx()))
+
+        // Draw live/buy-hold equity (gold)
+        if (liveEquity.size >= 2) {
+            val livePath = Path()
+            val liveStep = w / (liveEquity.size - 1)
+            liveEquity.forEachIndexed { i, eq ->
+                val x = i * liveStep
+                val y = h - ((eq - minVal) / range * h).toFloat()
+                if (i == 0) livePath.moveTo(x, y) else livePath.lineTo(x, y)
+            }
+            drawPath(livePath, color = Color(0xFFFFD700), style = Stroke(width = 2.dp.toPx()))
         }
     }
 }

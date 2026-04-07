@@ -1,18 +1,54 @@
-/// © GainzAlgo
+/// © GainzAlgo V2 — Enhanced
 
 //@version=5
-indicator('GainzAlgo V2 [Essential]', overlay=true, max_labels_count=500)
+indicator('GainzAlgo V2 [Enhanced]', overlay=true, max_labels_count=500)
 
-show_tp_sl = input.bool(true, 'Display TP & SL', group='Techical', tooltip='Display the exact TP & SL price levels for BUY & SELL signals.')
-rrr = input.string('1:2', 'Risk to Reward Ratio', group='Techical', options=['1:1', '2:3', '1:2', '1:4'], tooltip='Set a risk to reward ratio (RRR).')
-tp_sl_multi = input.float(1, 'TP & SL Multiplier', 1, group='Techical',  tooltip='Multiplies both TP and SL by a chosen index. Higher - higher risk.')
-tp_sl_prec = input.int(2, 'TP & SL Precision', 0, group='Techical')
+// ═══════════════════════════════════════════════════════════════════
+//  INPUTS
+// ═══════════════════════════════════════════════════════════════════
 
-candle_stability_index_param = 0.5
-rsi_index_param = 70
-candle_delta_length_param  = 4
-disable_repeating_signals_param = input.bool(true, 'Disable Repeating Signals', group='Techical', tooltip='Removes repeating signals. Useful for removing clusters of signals and general clarity.')
+// ── Technical ──
+show_tp_sl = input.bool(true, 'Display TP & SL', group='Technical', tooltip='Display the exact TP & SL price levels for BUY & SELL signals.')
+rrr = input.string('1:2', 'Risk to Reward Ratio', group='Technical', options=['1:1', '2:3', '1:2', '1:4'], tooltip='Set a risk to reward ratio (RRR).')
+tp_sl_multi = input.float(1, 'TP & SL Multiplier', 1, group='Technical', tooltip='Multiplies both TP and SL by a chosen index. Higher = higher risk.')
+tp_sl_prec = input.int(2, 'TP & SL Precision', 0, group='Technical')
+disable_repeating_signals_param = input.bool(true, 'Disable Repeating Signals', group='Technical', tooltip='Removes repeating signals. Useful for removing clusters of signals and general clarity.')
 
+// ── Core Filters ──
+candle_stability_index = input.float(0.5, 'Candle Stability (body/TR)', minval=0.1, maxval=0.9, step=0.05, group='Core Filters', tooltip='Minimum body-to-true-range ratio. Filters out doji/indecision candles.')
+rsi_period = input.int(14, 'RSI Period', minval=5, maxval=50, group='Core Filters')
+rsi_buy_max = input.float(55.0, 'RSI Buy Max', minval=20, maxval=70, group='Core Filters', tooltip='Buy only when RSI is below this (was 70 — too loose). Tighter = better reversal confirmation.')
+rsi_sell_min = input.float(45.0, 'RSI Sell Min', minval=30, maxval=80, group='Core Filters', tooltip='Sell only when RSI is above this (was 30 — almost always true). Tighter = better signals.')
+candle_delta_length = input.int(4, 'Momentum Lookback', minval=2, maxval=20, group='Core Filters', tooltip='Number of bars to check for price momentum (dip for buy, rise for sell).')
+
+// ── Trend Filter (NEW) ──
+use_trend_filter = input.bool(true, 'Enable Trend Filter', group='Trend Filter', tooltip='Only buy in uptrends, only sell in downtrends. Uses EMA 50/200.')
+ema_fast_len = input.int(50, 'Fast EMA', minval=10, maxval=100, group='Trend Filter')
+ema_slow_len = input.int(200, 'Slow EMA', minval=50, maxval=500, group='Trend Filter')
+trend_mode = input.string('EMA Alignment (50>200)', 'Trend Mode', options=['Price Above/Below EMA', 'EMA Alignment (50>200)', 'Both'], group='Trend Filter', tooltip='How to determine trend direction. EMA Alignment allows pullback entries within the trend.')
+
+// ── Volume Confirmation (NEW) ──
+use_volume_filter = input.bool(true, 'Enable Volume Filter', group='Volume', tooltip='Require above-average volume for engulfing signals.')
+vol_lookback = input.int(20, 'Volume MA Period', minval=5, maxval=50, group='Volume')
+vol_multiplier = input.float(1.0, 'Volume Multiplier', minval=0.5, maxval=5.0, step=0.1, group='Volume', tooltip='Signal candle volume must exceed avg * this multiplier. Use 1.0 for above-average, 1.2+ for stronger confirmation.')
+
+// ── MACD Confirmation (NEW) ──
+use_macd_filter = input.bool(false, 'Enable MACD Filter', group='MACD', tooltip='Require MACD histogram direction alignment. Off by default — enable for fewer but higher-quality signals.')
+macd_fast = input.int(12, 'MACD Fast', minval=5, maxval=50, group='MACD')
+macd_slow = input.int(26, 'MACD Slow', minval=10, maxval=100, group='MACD')
+macd_signal = input.int(9, 'MACD Signal', minval=3, maxval=30, group='MACD')
+
+// ── ADX Strength (NEW) ──
+use_adx_filter = input.bool(false, 'Enable ADX Filter', group='ADX', tooltip='Only signal when ADX > threshold (trending market). Disabled by default — enable for higher quality but fewer signals.')
+adx_period = input.int(14, 'ADX Period', minval=5, maxval=50, group='ADX')
+adx_threshold = input.float(20.0, 'ADX Minimum', minval=10, maxval=50, group='ADX', tooltip='Minimum ADX value to confirm a trend is present.')
+
+// ── Multi-Timeframe (NEW) ──
+use_htf_filter = input.bool(false, 'Enable HTF Trend Filter', group='Multi-Timeframe', tooltip='Check higher timeframe EMA direction before entry. Disabled by default.')
+htf_timeframe = input.timeframe('D', 'Higher Timeframe', group='Multi-Timeframe')
+htf_ema_len = input.int(50, 'HTF EMA Length', minval=10, maxval=200, group='Multi-Timeframe')
+
+// ── Cosmetic ──
 GREEN = color.rgb(29, 255, 40)
 RED = color.rgb(255, 0, 0)
 TRANSPARENT = color.rgb(0, 0, 0, 100)
@@ -23,27 +59,80 @@ buy_label_color = input(GREEN, 'BUY Label Color', inline='Highlight', group='Cos
 sell_label_color = input(RED, 'SELL Label Color', inline='Highlight', group='Cosmetic')
 label_text_color = input(color.white, 'Label Text Color', inline='Highlight', group='Cosmetic')
 
-stable_candle = math.abs(close - open) / ta.tr > candle_stability_index_param
-rsi = ta.rsi(close, 14)
-atr = ta.atr(14)
+// ── Optional Overlays ──
+show_emas = input.bool(true, 'Show Trend EMAs', group='Overlays')
+show_vol_bar = input.bool(false, 'Highlight Volume Spikes', group='Overlays')
 
+// ═══════════════════════════════════════════════════════════════════
+//  CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Core indicators ──
+stable_candle = math.abs(close - open) / ta.tr > candle_stability_index
+rsi_val = ta.rsi(close, rsi_period)
+atr_val = ta.atr(14)
+
+// ── Engulfing patterns ──
 bullish_engulfing = close[1] < open[1] and close > open and close > open[1]
-rsi_below = rsi < rsi_index_param
-decrease_over = close < close[candle_delta_length_param]
+bearish_engulfing = close[1] > open[1] and close < open and close < open[1]
+
+// ── Momentum check ──
+price_dipping = close < close[candle_delta_length]
+price_rising = close > close[candle_delta_length]
+
+// ── RSI (tightened) ──
+rsi_ok_buy  = rsi_val < rsi_buy_max   // default < 55 (was 70 → tightened)
+rsi_ok_sell = rsi_val > rsi_sell_min   // default > 45 (was 30 → tightened)
+
+// ── Trend filter ──
+ema_fast_val = ta.ema(close, ema_fast_len)
+ema_slow_val = ta.ema(close, ema_slow_len)
+
+price_above_ema = close > ema_fast_val
+price_below_ema = close < ema_fast_val
+ema_bullish = ema_fast_val > ema_slow_val
+ema_bearish = ema_fast_val < ema_slow_val
+
+trend_bull = not use_trend_filter or (trend_mode == 'Price Above/Below EMA' ? price_above_ema : trend_mode == 'EMA Alignment (50>200)' ? ema_bullish : (price_above_ema and ema_bullish))
+trend_bear = not use_trend_filter or (trend_mode == 'Price Above/Below EMA' ? price_below_ema : trend_mode == 'EMA Alignment (50>200)' ? ema_bearish : (price_below_ema and ema_bearish))
+
+// ── Volume filter ──
+vol_sma = ta.sma(volume, vol_lookback)
+vol_ok = not use_volume_filter or (volume > vol_sma * vol_multiplier)
+
+// ── MACD filter ──
+[macd_line, signal_line, hist_line] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+macd_bull = not use_macd_filter or (hist_line > hist_line[1])  // histogram rising
+macd_bear = not use_macd_filter or (hist_line < hist_line[1])  // histogram falling
+
+// ── ADX filter ──
+[di_plus, di_minus, adx_val] = ta.dmi(adx_period, adx_period)
+adx_ok = not use_adx_filter or (adx_val > adx_threshold)
+
+// ── Multi-timeframe trend ──
+htf_ema = request.security(syminfo.tickerid, htf_timeframe, ta.ema(close, htf_ema_len))
+htf_bull = not use_htf_filter or (close > htf_ema)
+htf_bear = not use_htf_filter or (close < htf_ema)
+
+// ═══════════════════════════════════════════════════════════════════
+//  SIGNAL LOGIC
+// ═══════════════════════════════════════════════════════════════════
 
 var last_signal = ''
 var tp = 0.
 var sl = 0.
 
-bull_state = bullish_engulfing and stable_candle and rsi_below and decrease_over and barstate.isconfirmed
+// Buy: engulfing + stability + RSI(<45) + dip + trend up + volume + MACD rising + ADX + HTF
+bull_state = bullish_engulfing and stable_candle and rsi_ok_buy and price_dipping and trend_bull and vol_ok and macd_bull and adx_ok and htf_bull and barstate.isconfirmed
 bull = bull_state and (disable_repeating_signals_param ? (last_signal != 'buy' ? true : na) : true)
 
-bearish_engulfing = close[1] > open[1] and close < open and close < open[1]
-rsi_above = rsi > 100 - rsi_index_param
-increase_over = close > close[candle_delta_length_param]
-
-bear_state = bearish_engulfing and stable_candle and rsi_above and increase_over and barstate.isconfirmed
+// Sell: engulfing + stability + RSI(>55) + rise + trend down + volume + MACD falling + ADX + HTF
+bear_state = bearish_engulfing and stable_candle and rsi_ok_sell and price_rising and trend_bear and vol_ok and macd_bear and adx_ok and htf_bear and barstate.isconfirmed
 bear = bear_state and (disable_repeating_signals_param ? (last_signal != 'sell' ? true : na) : true)
+
+// ═══════════════════════════════════════════════════════════════════
+//  TP / SL
+// ═══════════════════════════════════════════════════════════════════
 
 round_up(number, decimals) =>
     factor = math.pow(10, decimals)
@@ -51,7 +140,7 @@ round_up(number, decimals) =>
 
 if bull
     last_signal := 'buy'
-    dist = atr * tp_sl_multi
+    dist = atr_val * tp_sl_multi
     tp_dist = rrr == '2:3' ? dist / 2 * 3 : rrr == '1:2' ? dist * 2 : rrr == '1:4' ? dist * 4 : dist
     tp := round_up(close + tp_dist, tp_sl_prec)
     sl := round_up(close - dist, tp_sl_prec)
@@ -66,9 +155,8 @@ if bull
     label.new(show_tp_sl ? bar_index : na, low, 'TP: ' + str.tostring(tp) + '\nSL: ' + str.tostring(sl), yloc=yloc.price, color=color.gray, style=label.style_label_down, textcolor=label_text_color)
 
 if bear
-
     last_signal := 'sell'
-    dist = atr * tp_sl_multi
+    dist = atr_val * tp_sl_multi
     tp_dist = rrr == '2:3' ? dist / 2 * 3 : rrr == '1:2' ? dist * 2 : rrr == '1:4' ? dist * 4 : dist
     tp := round_up(close - tp_dist, tp_sl_prec)
     sl := round_up(close + dist, tp_sl_prec)
@@ -81,6 +169,19 @@ if bear
         label.new(bear ? bar_index : na, high, 'SELL', yloc=yloc.abovebar, color=sell_label_color, style=label.style_arrowdown, textcolor=TRANSPARENT, size=label_size)
 
     label.new(show_tp_sl ? bar_index : na, low, 'TP: ' + str.tostring(tp) + '\nSL: ' + str.tostring(sl), yloc=yloc.price, color=color.gray, style=label.style_label_up, textcolor=label_text_color)
+
+// ═══════════════════════════════════════════════════════════════════
+//  OVERLAYS
+// ═══════════════════════════════════════════════════════════════════
+
+plot(show_emas and use_trend_filter ? ema_fast_val : na, 'EMA Fast', color=color.new(color.blue, 40), linewidth=1)
+plot(show_emas and use_trend_filter ? ema_slow_val : na, 'EMA Slow', color=color.new(color.orange, 40), linewidth=1)
+
+barcolor(show_vol_bar and volume > vol_sma * vol_multiplier ? (close > open ? color.new(GREEN, 60) : color.new(RED, 60)) : na)
+
+// ═══════════════════════════════════════════════════════════════════
+//  ALERTS
+// ═══════════════════════════════════════════════════════════════════
 
 alertcondition(bull or bear, 'BUY & SELL Signals', 'New signal!')
 alertcondition(bull, 'BUY Signals (Only)', 'New signal: BUY')

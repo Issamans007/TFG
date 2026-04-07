@@ -30,8 +30,15 @@ class AlertMonitor @Inject constructor(
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning
 
-    /** Previous tick values keyed by alert-id — used for "crosses" detection */
-    private val previousValues = mutableMapOf<String, Double>()
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /** Previous tick values keyed by alert-id — persisted so "crosses" detection survives restarts */
+    private val previousValues = mutableMapOf<String, Double>().also { map ->
+        prefs.getStringSet(KEY_PREV_VALUES, null)?.forEach { entry ->
+            val parts = entry.split("=", limit = 2)
+            if (parts.size == 2) parts[1].toDoubleOrNull()?.let { map[parts[0]] = it }
+        }
+    }
 
     /** Active alarm-loop jobs keyed by alert-id */
     private val activeAlarms = mutableMapOf<String, Job>()
@@ -43,6 +50,8 @@ class AlertMonitor @Inject constructor(
         const val ALERT_CHANNEL_ID = "tfg_alert_channel"
         private const val CHECK_INTERVAL_MS = 5_000L
         private const val RELATIVE_TOLERANCE = 0.001 // 0.1% relative tolerance for EQUALS
+        private const val PREFS_NAME = "tfg_alert_monitor"
+        private const val KEY_PREV_VALUES = "previous_values"
     }
 
     // ─── Lifecycle ───────────────────────────────────────────────
@@ -75,12 +84,18 @@ class AlertMonitor @Inject constructor(
         monitorJob = null
         activeAlarms.values.forEach { it.cancel() }
         activeAlarms.clear()
-        previousValues.clear()
+        // Don't clear previousValues — they're persisted for restart survival
         _isRunning.value = false
         Timber.i("AlertMonitor stopped")
     }
 
     // ─── Ticker price collector ──────────────────────────────────
+
+    private fun persistPreviousValues() {
+        prefs.edit().putStringSet(KEY_PREV_VALUES,
+            previousValues.entries.map { "${it.key}=${it.value}" }.toSet()
+        ).apply()
+    }
 
     private suspend fun collectTickerPrices() {
         try {
@@ -103,6 +118,7 @@ class AlertMonitor @Inject constructor(
                 val currentValue = resolveCurrentValue(alert) ?: continue
                 val prevValue = previousValues[alert.id]
                 previousValues[alert.id] = currentValue
+                persistPreviousValues()
 
                 if (prevValue != null && checkCondition(alert, currentValue, prevValue)) {
                     triggerAlert(alert)

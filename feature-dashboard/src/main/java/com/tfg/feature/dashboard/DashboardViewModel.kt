@@ -1,5 +1,6 @@
 package com.tfg.feature.dashboard
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tfg.domain.model.*
@@ -9,6 +10,7 @@ import com.tfg.domain.repository.DonationRepository
 import com.tfg.domain.repository.SignalRepository
 import com.tfg.engine.EngineManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -21,7 +23,11 @@ data class DashboardUiState(
     val totalDonated: Double = 0.0,
     val botActive: Boolean = false,
     val connectionState: ConnectionState? = null,
-    val error: String? = null
+    val error: String? = null,
+    val cardConfigs: List<DashboardCardConfig> = DashboardCardType.entries.mapIndexed { i, type ->
+        DashboardCardConfig(type = type, visible = true, order = i)
+    },
+    val isCustomizing: Boolean = false
 )
 
 @HiltViewModel
@@ -30,13 +36,17 @@ class DashboardViewModel @Inject constructor(
     private val getAnalyticsUseCase: GetAnalyticsUseCase,
     private val signalRepository: SignalRepository,
     private val donationRepository: DonationRepository,
-    private val engineManager: EngineManager
+    private val engineManager: EngineManager,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DashboardUiState())
     val state: StateFlow<DashboardUiState> = _state
 
+    private val prefs = context.getSharedPreferences("dashboard_cards", Context.MODE_PRIVATE)
+
     init {
+        loadCardConfig()
         loadDashboard()
         // Observe engine active state
         viewModelScope.launch {
@@ -97,5 +107,59 @@ class DashboardViewModel @Inject constructor(
                 // Silent failure for signals
             }
         }
+    }
+
+    // ─── Card Customization ─────────────────────────────────────────
+
+    fun toggleCustomizing() {
+        _state.update { it.copy(isCustomizing = !it.isCustomizing) }
+    }
+
+    fun toggleCardVisibility(type: DashboardCardType) {
+        _state.update { s ->
+            s.copy(cardConfigs = s.cardConfigs.map {
+                if (it.type == type) it.copy(visible = !it.visible) else it
+            })
+        }
+        saveCardConfig()
+    }
+
+    fun moveCard(fromIndex: Int, toIndex: Int) {
+        _state.update { s ->
+            val list = s.cardConfigs.toMutableList()
+            if (fromIndex in list.indices && toIndex in list.indices) {
+                val item = list.removeAt(fromIndex)
+                list.add(toIndex, item)
+                s.copy(cardConfigs = list.mapIndexed { i, c -> c.copy(order = i) })
+            } else s
+        }
+        saveCardConfig()
+    }
+
+    private fun loadCardConfig() {
+        val json = prefs.getString("card_order", null) ?: return
+        try {
+            val entries = json.split(";").mapNotNull { entry ->
+                val parts = entry.split(",")
+                if (parts.size == 3) {
+                    val type = DashboardCardType.entries.find { it.name == parts[0] } ?: return@mapNotNull null
+                    DashboardCardConfig(type, parts[1].toBoolean(), parts[2].toInt())
+                } else null
+            }.sortedBy { it.order }
+            if (entries.isNotEmpty()) {
+                // Merge: keep new card types that might have been added
+                val savedTypes = entries.map { it.type }.toSet()
+                val missing = DashboardCardType.entries.filter { it !in savedTypes }
+                    .mapIndexed { i, t -> DashboardCardConfig(t, true, entries.size + i) }
+                _state.update { it.copy(cardConfigs = entries + missing) }
+            }
+        } catch (_: Exception) { }
+    }
+
+    private fun saveCardConfig() {
+        val json = _state.value.cardConfigs.joinToString(";") {
+            "${it.type.name},${it.visible},${it.order}"
+        }
+        prefs.edit().putString("card_order", json).apply()
     }
 }

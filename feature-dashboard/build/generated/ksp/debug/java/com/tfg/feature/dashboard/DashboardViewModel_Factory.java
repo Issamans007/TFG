@@ -1,5 +1,6 @@
 package com.tfg.feature.dashboard;
 
+import android.content.Context;
 import com.tfg.domain.repository.DonationRepository;
 import com.tfg.domain.repository.SignalRepository;
 import com.tfg.domain.usecase.analytics.GetAnalyticsUseCase;
@@ -13,7 +14,7 @@ import javax.annotation.processing.Generated;
 import javax.inject.Provider;
 
 @ScopeMetadata
-@QualifierMetadata
+@QualifierMetadata("dagger.hilt.android.qualifiers.ApplicationContext")
 @DaggerGenerated
 @Generated(
     value = "dagger.internal.codegen.ComponentProcessor",
@@ -37,21 +38,24 @@ public final class DashboardViewModel_Factory implements Factory<DashboardViewMo
 
   private final Provider<EngineManager> engineManagerProvider;
 
+  private final Provider<Context> contextProvider;
+
   public DashboardViewModel_Factory(Provider<GetPortfolioUseCase> getPortfolioUseCaseProvider,
       Provider<GetAnalyticsUseCase> getAnalyticsUseCaseProvider,
       Provider<SignalRepository> signalRepositoryProvider,
       Provider<DonationRepository> donationRepositoryProvider,
-      Provider<EngineManager> engineManagerProvider) {
+      Provider<EngineManager> engineManagerProvider, Provider<Context> contextProvider) {
     this.getPortfolioUseCaseProvider = getPortfolioUseCaseProvider;
     this.getAnalyticsUseCaseProvider = getAnalyticsUseCaseProvider;
     this.signalRepositoryProvider = signalRepositoryProvider;
     this.donationRepositoryProvider = donationRepositoryProvider;
     this.engineManagerProvider = engineManagerProvider;
+    this.contextProvider = contextProvider;
   }
 
   @Override
   public DashboardViewModel get() {
-    return newInstance(getPortfolioUseCaseProvider.get(), getAnalyticsUseCaseProvider.get(), signalRepositoryProvider.get(), donationRepositoryProvider.get(), engineManagerProvider.get());
+    return newInstance(getPortfolioUseCaseProvider.get(), getAnalyticsUseCaseProvider.get(), signalRepositoryProvider.get(), donationRepositoryProvider.get(), engineManagerProvider.get(), contextProvider.get());
   }
 
   public static DashboardViewModel_Factory create(
@@ -59,13 +63,13 @@ public final class DashboardViewModel_Factory implements Factory<DashboardViewMo
       Provider<GetAnalyticsUseCase> getAnalyticsUseCaseProvider,
       Provider<SignalRepository> signalRepositoryProvider,
       Provider<DonationRepository> donationRepositoryProvider,
-      Provider<EngineManager> engineManagerProvider) {
-    return new DashboardViewModel_Factory(getPortfolioUseCaseProvider, getAnalyticsUseCaseProvider, signalRepositoryProvider, donationRepositoryProvider, engineManagerProvider);
+      Provider<EngineManager> engineManagerProvider, Provider<Context> contextProvider) {
+    return new DashboardViewModel_Factory(getPortfolioUseCaseProvider, getAnalyticsUseCaseProvider, signalRepositoryProvider, donationRepositoryProvider, engineManagerProvider, contextProvider);
   }
 
   public static DashboardViewModel newInstance(GetPortfolioUseCase getPortfolioUseCase,
       GetAnalyticsUseCase getAnalyticsUseCase, SignalRepository signalRepository,
-      DonationRepository donationRepository, EngineManager engineManager) {
-    return new DashboardViewModel(getPortfolioUseCase, getAnalyticsUseCase, signalRepository, donationRepository, engineManager);
+      DonationRepository donationRepository, EngineManager engineManager, Context context) {
+    return new DashboardViewModel(getPortfolioUseCase, getAnalyticsUseCase, signalRepository, donationRepository, engineManager, context);
   }
 }

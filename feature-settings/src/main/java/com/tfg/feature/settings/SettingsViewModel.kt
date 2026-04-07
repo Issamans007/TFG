@@ -1,11 +1,15 @@
 package com.tfg.feature.settings
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.tfg.core.util.HapticManager
+import com.tfg.core.util.SoundManager
 import com.tfg.domain.model.*
 import com.tfg.domain.repository.RiskRepository
 import com.tfg.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -17,6 +21,13 @@ data class SettingsUiState(
     val riskConfig: RiskConfig = RiskConfig(),
     val apiKeyConfigured: Boolean = false,
     val biometricEnabled: Boolean = false,
+    val theme: String = "dark",
+    val hapticEnabled: Boolean = true,
+    val soundEnabled: Boolean = true,
+    val soundOrderFill: SoundManager.SoundType = SoundManager.SoundType.CHIME,
+    val soundSlHit: SoundManager.SoundType = SoundManager.SoundType.ERROR,
+    val soundTpHit: SoundManager.SoundType = SoundManager.SoundType.SUCCESS,
+    val soundAlert: SoundManager.SoundType = SoundManager.SoundType.ALERT_TONE,
     val error: String? = null,
     val saved: Boolean = false
 )
@@ -24,7 +35,8 @@ data class SettingsUiState(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
-    private val riskRepository: RiskRepository
+    private val riskRepository: RiskRepository,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsUiState())
@@ -47,10 +59,23 @@ class SettingsViewModel @Inject constructor(
                     paperTrading = paperTrading,
                     donationPercent = donationPercent,
                     apiKeyConfigured = apiKeyConfigured,
-                    biometricEnabled = biometricEnabled
+                    biometricEnabled = biometricEnabled,
+                    hapticEnabled = HapticManager.isEnabled(context),
+                    soundEnabled = SoundManager.isEnabled(context),
+                    soundOrderFill = SoundManager.getSoundForEvent(context, SoundManager.SoundEvent.ORDER_FILL),
+                    soundSlHit = SoundManager.getSoundForEvent(context, SoundManager.SoundEvent.STOP_LOSS),
+                    soundTpHit = SoundManager.getSoundForEvent(context, SoundManager.SoundEvent.TAKE_PROFIT),
+                    soundAlert = SoundManager.getSoundForEvent(context, SoundManager.SoundEvent.ALERT)
                 )
             }
             
+            // Collect theme
+            launch {
+                settingsRepository.getTheme().collect { theme ->
+                    _state.update { it.copy(theme = theme) }
+                }
+            }
+
             // Collect riskConfig separately — only update the riskConfig field
             launch {
                 riskRepository.getRiskConfig().collect { risk ->
@@ -95,11 +120,46 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setTheme(theme: String) {
+        viewModelScope.launch {
+            settingsRepository.setTheme(theme)
+            _state.update { it.copy(theme = theme) }
+        }
+    }
+
     fun activateKillSwitch() {
         viewModelScope.launch {
             riskRepository.activateKillSwitch()
             _state.update { it.copy(botEnabled = false) }
         }
+    }
+
+    // ─── Haptic & Sound ──────────────────────────────────────────────
+
+    fun toggleHaptic(enabled: Boolean) {
+        HapticManager.setEnabled(context, enabled)
+        _state.update { it.copy(hapticEnabled = enabled) }
+    }
+
+    fun toggleSound(enabled: Boolean) {
+        SoundManager.setEnabled(context, enabled)
+        _state.update { it.copy(soundEnabled = enabled) }
+    }
+
+    fun setSoundForEvent(event: SoundManager.SoundEvent, type: SoundManager.SoundType) {
+        SoundManager.setSoundForEvent(context, event, type)
+        _state.update {
+            when (event) {
+                SoundManager.SoundEvent.ORDER_FILL -> it.copy(soundOrderFill = type)
+                SoundManager.SoundEvent.STOP_LOSS -> it.copy(soundSlHit = type)
+                SoundManager.SoundEvent.TAKE_PROFIT -> it.copy(soundTpHit = type)
+                SoundManager.SoundEvent.ALERT -> it.copy(soundAlert = type)
+            }
+        }
+    }
+
+    fun previewSound(event: SoundManager.SoundEvent) {
+        SoundManager.play(context, event)
     }
 
     fun clearSaved() {

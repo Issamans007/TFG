@@ -6,6 +6,8 @@ import com.tfg.domain.model.BotConfig
 import com.tfg.domain.repository.SettingsRepository
 import com.tfg.security.KeystoreManager
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import javax.inject.Inject
@@ -16,6 +18,11 @@ class SettingsRepositoryImpl @Inject constructor(
     private val prefs: SharedPreferences,
     private val keystoreManager: KeystoreManager
 ) : SettingsRepository {
+
+    // Reactive theme flow — emits immediately and whenever setTheme() is called
+    private val _themeFlow = MutableStateFlow(
+        prefs.getString(Constants.PREF_SELECTED_THEME, "dark") ?: "dark"
+    )
 
     override suspend fun isBotEnabled(): Boolean =
         prefs.getBoolean(Constants.PREF_BOT_ENABLED, false)
@@ -110,12 +117,11 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
-    override fun getTheme(): Flow<String> = flowOf(
-        prefs.getString(Constants.PREF_SELECTED_THEME, "dark") ?: "dark"
-    )
+    override fun getTheme(): Flow<String> = _themeFlow.asStateFlow()
 
     override suspend fun setTheme(theme: String) {
         prefs.edit().putString(Constants.PREF_SELECTED_THEME, theme).apply()
+        _themeFlow.value = theme
     }
 
     override fun getLanguage(): Flow<String> = flowOf("en")

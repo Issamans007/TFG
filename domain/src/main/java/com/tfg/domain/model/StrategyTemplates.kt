@@ -26,57 +26,118 @@ object StrategyTemplates {
     private fun gainzAlgo() = StrategyTemplate(
         id = StrategyTemplateId.GAINZ_ALGO,
         name = "GainzAlgo V2",
-        description = "Engulfing-candle reversal strategy with candle stability filter, RSI confirmation, and ATR-based TP/SL. Detects bullish/bearish engulfing patterns, confirms with candle body > 50% of true range, filters with RSI(14), and uses 1:2 risk-reward ratio.",
+        description = "Enhanced engulfing-candle reversal with EMA 50/200 trend alignment, volume confirmation, optional MACD/ADX filters, tightened RSI, and ATR-based 1:2 TP/SL. Buys dips in uptrends, sells rallies in downtrends.",
         code = """
-// GainzAlgo V2 Strategy
-// Engulfing pattern + candle stability + RSI filter + ATR TP/SL
+// GainzAlgo V2 — Enhanced Strategy
+// Engulfing + stability + EMA trend + volume + RSI + ATR TP/SL
+// Optional: MACD histogram, ADX strength (enable for higher quality)
 
-var CANDLE_STABILITY_INDEX = 0.5;
+// ── Core ──
+var CANDLE_STABILITY = 0.5;  // body/TR minimum ratio
 var RSI_PERIOD = 14;
-var RSI_UPPER = 70.0;
-var RSI_LOWER = 30.0;
-var CANDLE_DELTA_LENGTH = 4;
+var RSI_BUY_MAX = 55.0;     // buy when RSI < 55 (tightened from original 70)
+var RSI_SELL_MIN = 45.0;    // sell when RSI > 45 (tightened from original 30)
+var DELTA_LENGTH = 4;        // momentum lookback bars
+
+// ── Trend Filter (EMA alignment) ──
+var USE_TREND_FILTER = 1;    // 1=enabled, 0=disabled
+var EMA_FAST = 50;
+var EMA_SLOW = 200;
+
+// ── Volume Filter ──
+var USE_VOLUME_FILTER = 1;   // 1=enabled, 0=disabled
+var VOL_LOOKBACK = 20;
+var VOL_MULTIPLIER = 1.0;   // volume must exceed avg * this
+
+// ── MACD Confirmation (off by default — enable for fewer but higher-quality signals) ──
+var USE_MACD_FILTER = 0;
+var MACD_FAST = 12;
+var MACD_SLOW = 26;
+var MACD_SIGNAL = 9;
+
+// ── ADX Strength (off by default) ──
+var USE_ADX_FILTER = 0;
+var ADX_PERIOD = 14;
+var ADX_THRESHOLD = 20.0;
+
+// ── Risk Management ──
 var TP_SL_MULTIPLIER = 1.0;
 var RISK_REWARD_RATIO = 2.0;
 var POSITION_SIZE_PCT = 2.0;
 
 function strategy(candles) {
-    if (candles.length < 15) return {type:'HOLD'};
+    var minBars = USE_TREND_FILTER ? Math.max(EMA_SLOW + 5, 52) : Math.max(DELTA_LENGTH + 15, 30);
+    if (candles.length < minBars) return {type:'HOLD'};
 
     var last = candles[candles.length - 1];
     var prev = candles[candles.length - 2];
-    var deltaRef = candles[candles.length - CANDLE_DELTA_LENGTH - 1];
+    var deltaRef = candles[candles.length - DELTA_LENGTH - 1];
 
+    // ── Candle stability ──
     var tr = Math.max(last.high - last.low,
                       Math.abs(last.high - prev.close),
                       Math.abs(last.low - prev.close));
+    var body = Math.abs(last.close - last.open);
+    if (!(tr > 0 && body / tr > CANDLE_STABILITY)) return {type:'HOLD'};
 
-    var candleBody = Math.abs(last.close - last.open);
-    var stable = tr > 0.0 && candleBody / tr > CANDLE_STABILITY_INDEX;
+    // ── Engulfing patterns ──
+    var bullEngulf = prev.close < prev.open && last.close > last.open && last.close > prev.open;
+    var bearEngulf = prev.close > prev.open && last.close < last.open && last.close < prev.open;
+    if (!bullEngulf && !bearEngulf) return {type:'HOLD'};
 
+    // ── RSI ──
     var rsiVal = rsi(candles, RSI_PERIOD);
 
-    var atrVal = atr(candles, RSI_PERIOD);
+    // ── Trend filter: EMA alignment only ──
+    // Only checks EMA50 > EMA200 (bull) — does NOT require price > EMA50
+    // This allows "buy the dip in an uptrend" pattern
+    var trendBull = true, trendBear = true;
+    if (USE_TREND_FILTER) {
+        var emaF = ema(candles, EMA_FAST);
+        var emaS = ema(candles, EMA_SLOW);
+        trendBull = emaF > emaS;
+        trendBear = emaF < emaS;
+    }
+
+    // ── Volume filter ──
+    if (USE_VOLUME_FILTER && candles.length > VOL_LOOKBACK) {
+        var volSum = 0;
+        for (var i = candles.length - VOL_LOOKBACK - 1; i < candles.length - 1; i++)
+            volSum += candles[i].volume;
+        var avgVol = volSum / VOL_LOOKBACK;
+        if (avgVol > 0 && last.volume < avgVol * VOL_MULTIPLIER)
+            return {type:'HOLD'};
+    }
+
+    // ── MACD histogram direction (optional) ──
+    var macdBull = true, macdBear = true;
+    if (USE_MACD_FILTER) {
+        var m = macd(candles, MACD_FAST, MACD_SLOW, MACD_SIGNAL);
+        var mPrev = macd(candles.slice(0, -1), MACD_FAST, MACD_SLOW, MACD_SIGNAL);
+        macdBull = m.histogram > mPrev.histogram;
+        macdBear = m.histogram < mPrev.histogram;
+    }
+
+    // ── ADX strength (optional) ──
+    if (USE_ADX_FILTER && adx(candles, ADX_PERIOD) < ADX_THRESHOLD)
+        return {type:'HOLD'};
+
+    // ── TP/SL ──
+    var atrVal = atr(candles, 14);
     var dist = atrVal * TP_SL_MULTIPLIER;
     var slPct = dist / last.close * 100;
     var tpPct = slPct * RISK_REWARD_RATIO;
 
-    var bullishEngulfing = prev.close < prev.open
-                        && last.close > last.open
-                        && last.close > prev.open;
-    var priceDip = last.close < deltaRef.close;
-
-    if (bullishEngulfing && stable && rsiVal < RSI_UPPER && priceDip) {
+    // ── BUY: engulfing + RSI<55 + price dip + EMA uptrend + volume ──
+    if (bullEngulf && rsiVal < RSI_BUY_MAX && last.close < deltaRef.close
+        && trendBull && macdBull) {
         return {type:'BUY', sizePct: POSITION_SIZE_PCT,
             stopLossPct: slPct, takeProfitPct: tpPct};
     }
 
-    var bearishEngulfing = prev.close > prev.open
-                        && last.close < last.open
-                        && last.close < prev.open;
-    var priceRise = last.close > deltaRef.close;
-
-    if (bearishEngulfing && stable && rsiVal > RSI_LOWER && priceRise) {
+    // ── SELL: engulfing + RSI>45 + price rise + EMA downtrend + volume ──
+    if (bearEngulf && rsiVal > RSI_SELL_MIN && last.close > deltaRef.close
+        && trendBear && macdBear) {
         return {type:'SELL', sizePct: 100.0,
             stopLossPct: slPct, takeProfitPct: tpPct};
     }
@@ -85,10 +146,24 @@ function strategy(candles) {
 }
 """.trimIndent(),
         defaultParams = mapOf(
-            "CANDLE_STABILITY_INDEX" to "0.5",
-            "RSI_UPPER" to "70.0",
-            "RSI_LOWER" to "30.0",
-            "CANDLE_DELTA_LENGTH" to "4",
+            "CANDLE_STABILITY" to "0.5",
+            "RSI_PERIOD" to "14",
+            "RSI_BUY_MAX" to "55.0",
+            "RSI_SELL_MIN" to "45.0",
+            "DELTA_LENGTH" to "4",
+            "USE_TREND_FILTER" to "1",
+            "EMA_FAST" to "50",
+            "EMA_SLOW" to "200",
+            "USE_VOLUME_FILTER" to "1",
+            "VOL_LOOKBACK" to "20",
+            "VOL_MULTIPLIER" to "1.0",
+            "USE_MACD_FILTER" to "0",
+            "MACD_FAST" to "12",
+            "MACD_SLOW" to "26",
+            "MACD_SIGNAL" to "9",
+            "USE_ADX_FILTER" to "0",
+            "ADX_PERIOD" to "14",
+            "ADX_THRESHOLD" to "20.0",
             "TP_SL_MULTIPLIER" to "1.0",
             "RISK_REWARD_RATIO" to "2.0",
             "POSITION_SIZE_PCT" to "2.0"

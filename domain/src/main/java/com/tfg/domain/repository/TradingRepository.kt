@@ -16,6 +16,9 @@ interface TradingRepository {
     suspend fun placePaperOrder(order: Order): Result<Order>
     suspend fun cancelPaperOrder(orderId: String): Result<Boolean>
 
+    /** Poll Binance for the current status/fill info of a placed order. */
+    suspend fun queryOrder(symbol: String, clientOrderId: String): Result<Order>
+
     suspend fun placeOcoOrder(symbol: String, side: OrderSide, quantity: Double,
                               price: Double, stopPrice: Double,
                               stopLimitPrice: Double): Result<List<Order>>

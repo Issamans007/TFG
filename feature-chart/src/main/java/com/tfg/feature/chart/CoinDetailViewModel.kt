@@ -338,7 +338,22 @@ data class CoinDetailUiState(
     val isBacktesting: Boolean = false,
     val backtestProgress: Float = 0f,
     val scriptSaved: Boolean = false,
-    val backtestDays: Int = 30
+    val backtestDays: Int = 30,
+    // Backtest vs Live comparison
+    val liveEquityCurve: List<Double> = emptyList(),
+    val showBacktestComparison: Boolean = false,
+    // Buy & Hold vs Strategy comparison
+    val showBuyAndHoldComparison: Boolean = false,
+    val buyAndHoldEquityCurve: List<Double> = emptyList(),
+    val strategyEquityCurve: List<Double> = emptyList(),
+    // Backtest-derived signal markers for replay
+    val backtestSignalMarkers: List<SignalMarker> = emptyList(),
+    // Replay mode
+    val replayMode: Boolean = false,
+    val replayBarIndex: Int = 0,
+    val replayPlaying: Boolean = false,
+    val replaySpeedMs: Long = 500L,
+    val replaySignals: List<SignalMarker> = emptyList()
 )
 
 @HiltViewModel
@@ -396,8 +411,138 @@ class CoinDetailViewModel @Inject constructor(
     fun toggleCmf() { _state.update { it.copy(showCmf = !it.showCmf) } }
     fun toggleDrawingTools() { _state.update { it.copy(showDrawingTools = !it.showDrawingTools) } }
 
+    fun toggleBacktestComparison() {
+        val current = _state.value
+        if (!current.showBacktestComparison && current.backtestResult != null) {
+            // Generate simulated live equity curve based on actual candle data
+            // Uses buy & hold as a proxy for "live" performance
+            val candles = current.candles
+            if (candles.size >= 2) {
+                val startPrice = candles.first().close
+                val startingCapital = current.backtestResult.startingCapital
+                val liveEquity = candles.map { c ->
+                    startingCapital * (c.close / startPrice)
+                }
+                _state.update { it.copy(showBacktestComparison = true, liveEquityCurve = liveEquity) }
+            } else {
+                _state.update { it.copy(showBacktestComparison = true) }
+            }
+        } else {
+            _state.update { it.copy(showBacktestComparison = !it.showBacktestComparison) }
+        }
+    }
+
     fun openSettings(indicator: String) {
         _state.update { it.copy(showSettingsDialog = true, editingIndicator = indicator) }
+    }
+
+    // ─── Replay Mode — Uses backtest signals (mirrors backtest exactly) ───
+
+    private var replayJob: Job? = null
+
+    fun enterReplayMode() {
+        val s = _state.value
+        val candles = s.candles
+        // Require a backtest to have been run first
+        if (candles.size < 10 || s.backtestResult == null || s.backtestSignalMarkers.isEmpty()) return
+        replayJob?.cancel()
+        val startBar = 50.coerceAtMost(candles.size - 1)
+        val startTime = candles[startBar].openTime
+        val visibleSignals = s.backtestSignalMarkers.filter { it.openTime <= startTime }
+        _state.update {
+            it.copy(
+                replayMode = true,
+                replayBarIndex = startBar,
+                replayPlaying = false,
+                replaySignals = visibleSignals
+            )
+        }
+    }
+
+    fun exitReplayMode() {
+        replayJob?.cancel()
+        _state.update {
+            it.copy(
+                replayMode = false,
+                replayPlaying = false,
+                replayBarIndex = 0,
+                replaySignals = emptyList()
+            )
+        }
+    }
+
+    fun replayStepForward() {
+        val s = _state.value
+        if (s.replayBarIndex >= s.candles.size - 1) return
+        val newIdx = s.replayBarIndex + 1
+        val barTime = s.candles[newIdx].openTime
+        val visibleSignals = s.backtestSignalMarkers.filter { it.openTime <= barTime }
+        _state.update { it.copy(replayBarIndex = newIdx, replaySignals = visibleSignals) }
+    }
+
+    fun replayStepBack() {
+        val s = _state.value
+        if (s.replayBarIndex <= 1) return
+        val newIdx = s.replayBarIndex - 1
+        val barTime = s.candles[newIdx].openTime
+        val visibleSignals = s.backtestSignalMarkers.filter { it.openTime <= barTime }
+        _state.update { it.copy(replayBarIndex = newIdx, replaySignals = visibleSignals) }
+    }
+
+    fun replayPlay() {
+        _state.update { it.copy(replayPlaying = true) }
+        replayJob?.cancel()
+        replayJob = viewModelScope.launch {
+            while (_state.value.replayPlaying) {
+                val s = _state.value
+                if (s.replayBarIndex >= s.candles.size - 1) {
+                    _state.update { it.copy(replayPlaying = false) }
+                    break
+                }
+                replayStepForward()
+                delay(_state.value.replaySpeedMs)
+            }
+        }
+    }
+
+    fun replayPause() {
+        replayJob?.cancel()
+        _state.update { it.copy(replayPlaying = false) }
+    }
+
+    fun setReplaySpeed(speedMs: Long) {
+        _state.update { it.copy(replaySpeedMs = speedMs) }
+    }
+
+    fun seekReplay(barIndex: Int) {
+        val s = _state.value
+        val clamped = barIndex.coerceIn(1, s.candles.size - 1)
+        val barTime = s.candles[clamped].openTime
+        val visibleSignals = s.backtestSignalMarkers.filter { it.openTime <= barTime }
+        _state.update { it.copy(replayBarIndex = clamped, replaySignals = visibleSignals) }
+    }
+
+    // ─── Buy & Hold Comparison ───────────────────────────────────────
+
+    fun toggleBuyAndHoldComparison() {
+        val s = _state.value
+        if (s.showBuyAndHoldComparison) {
+            _state.update { it.copy(showBuyAndHoldComparison = false, buyAndHoldEquityCurve = emptyList(), strategyEquityCurve = emptyList()) }
+            return
+        }
+        val result = s.backtestResult ?: return
+        val candles = s.candles
+        if (candles.isEmpty()) return
+        val startPrice = candles.first().close
+        val startCapital = result.entryAmount
+        val bhCurve = candles.map { c -> startCapital * (c.close / startPrice) }
+        _state.update {
+            it.copy(
+                showBuyAndHoldComparison = true,
+                buyAndHoldEquityCurve = bhCurve,
+                strategyEquityCurve = result.equityCurve
+            )
+        }
     }
 
     fun closeSettings() {
@@ -513,11 +658,35 @@ class CoinDetailViewModel @Inject constructor(
                 scriptRepository.save(script)
                 _state.update { it.copy(scriptSaved = true) }
                 val result = scriptRepository.backtest(
-                    tempId, templateId, symbol, _state.value.interval, _state.value.backtestDays
-                ) { progress ->
-                    _state.update { it.copy(backtestProgress = progress) }
+                    tempId, templateId, symbol, _state.value.interval, _state.value.backtestDays,
+                    onProgress = { progress ->
+                        _state.update { it.copy(backtestProgress = progress) }
+                    }
+                )
+                // Generate signal markers from backtest trades for chart overlay
+                val markers = result.trades.flatMap { trade ->
+                    listOfNotNull(
+                        SignalMarker(
+                            id = "bt_entry_${trade.entryTime}",
+                            scriptId = tempId,
+                            symbol = symbol,
+                            interval = _state.value.interval,
+                            openTime = trade.entryTime,
+                            signalType = if (trade.side == OrderSide.BUY) SignalType.BUY else SignalType.SELL,
+                            price = trade.entryPrice
+                        ),
+                        if (trade.exitTime > 0) SignalMarker(
+                            id = "bt_exit_${trade.exitTime}",
+                            scriptId = tempId,
+                            symbol = symbol,
+                            interval = _state.value.interval,
+                            openTime = trade.exitTime,
+                            signalType = SignalType.CLOSE,
+                            price = trade.exitPrice
+                        ) else null
+                    )
                 }
-                _state.update { it.copy(backtestResult = result, isBacktesting = false) }
+                _state.update { it.copy(backtestResult = result, isBacktesting = false, backtestSignalMarkers = markers, signalMarkers = markers) }
                 // Reload candles from DB (backtest already stored them) — don't re-fetch from API
                 loadBacktestCandles()
             } catch (e: Exception) {
@@ -555,6 +724,7 @@ class CoinDetailViewModel @Inject constructor(
                     .collect { candles ->
                         _state.update { it.copy(candles = candles, isLoading = false) }
                         recomputeCustomIndicators()
+                        recomputeIndicatorOutputs()
                     }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to load candles for $symbol")
@@ -571,6 +741,7 @@ class CoinDetailViewModel @Inject constructor(
                     .collect { candles ->
                         _state.update { it.copy(candles = candles, isLoading = false) }
                         recomputeCustomIndicators()
+                        recomputeIndicatorOutputs()
                     }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to load backtest candles for $symbol")

@@ -19,6 +19,7 @@ data class Order(
     val bracketParentId: String? = null,
     val timeInForce: TimeInForce = TimeInForce.GTC,
     val scheduledAt: Long? = null,
+    val conditionalTrigger: ConditionalTrigger? = null,
     val filledQuantity: Double = 0.0,
     val filledPrice: Double = 0.0,
     val fee: Double = 0.0,
@@ -34,6 +35,21 @@ data class Order(
     val binanceOrderId: Long? = null,
     val errorMessage: String? = null
 )
+
+data class ConditionalTrigger(
+    val triggerSymbol: String,
+    val condition: TriggerCondition,
+    val triggerPrice: Double,
+    val thenOrderType: OrderType = OrderType.MARKET,
+    val thenPrice: Double? = null
+)
+
+enum class TriggerCondition {
+    PRICE_ABOVE,
+    PRICE_BELOW,
+    PRICE_CROSSES_ABOVE,
+    PRICE_CROSSES_BELOW
+}
 
 data class TakeProfit(
     val id: String,

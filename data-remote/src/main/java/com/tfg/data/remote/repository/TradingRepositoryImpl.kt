@@ -191,6 +191,44 @@ class TradingRepositoryImpl @Inject constructor(
         true
     }
 
+    override suspend fun queryOrder(symbol: String, clientOrderId: String): Result<Order> = runCatching {
+        val timestamp = System.currentTimeMillis()
+        val params = mapOf(
+            "symbol" to symbol,
+            "origClientOrderId" to clientOrderId,
+            "timestamp" to timestamp.toString()
+        )
+        val signature = BinanceSigner.signParams(params, secretProvider())
+        val response = binanceApi.queryOrder(symbol, clientOrderId, timestamp, signature)
+
+        val fee = response.fills?.sumOf { it.commission.toDoubleOrNull() ?: 0.0 } ?: 0.0
+        val filledPrice = if (response.executedQty.toDouble() > 0) {
+            response.cummulativeQuoteQty.toDouble() / response.executedQty.toDouble()
+        } else 0.0
+
+        val order = Order(
+            id = clientOrderId,
+            symbol = symbol,
+            side = OrderSide.valueOf(response.side),
+            type = OrderType.MARKET,
+            status = mapBinanceStatus(response.status),
+            binanceOrderId = response.orderId,
+            quantity = response.origQty.toDouble(),
+            filledQuantity = response.executedQty.toDouble(),
+            filledPrice = filledPrice,
+            fee = fee,
+            feeAsset = response.fills?.firstOrNull()?.commissionAsset ?: "",
+            executedAt = if (response.status == "FILLED") response.updateTime else null,
+            updatedAt = response.updateTime,
+            createdAt = response.time
+        )
+        // Update local DB with fill info
+        orderDao.getOrderById(clientOrderId).first()?.let {
+            orderDao.updateStatus(clientOrderId, order.status.name)
+        }
+        order
+    }
+
     override suspend fun placeOcoOrder(
         symbol: String, side: OrderSide, quantity: Double,
         price: Double, stopPrice: Double, stopLimitPrice: Double

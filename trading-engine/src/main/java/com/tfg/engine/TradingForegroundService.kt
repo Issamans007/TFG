@@ -159,7 +159,26 @@ class TradingForegroundService : Service() {
             tradeExecutor.checkTakeProfits(order)
             tradeExecutor.checkStopLosses(order)
             tradeExecutor.checkTrailingStop(order)
+            tradeExecutor.checkConditionalOrder(order)
+            tradeExecutor.checkTimeBasedOrder(order)
         }
+
+        // Update home screen widget (throttled to ~30s)
+        widgetUpdateCounter++
+        if (widgetUpdateCounter >= 30) {
+            widgetUpdateCounter = 0
+            updateHomeWidget(openOrders.size)
+        }
+    }
+
+    @Volatile private var widgetUpdateCounter = 0
+
+    private fun updateHomeWidget(positionCount: Int) {
+        try {
+            val intent = android.content.Intent("com.tfg.widget.REFRESH")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+        } catch (_: Exception) { }
     }
 
     private suspend fun drainOfflineQueue() {

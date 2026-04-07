@@ -189,6 +189,21 @@ function initChart() {
     chart.resize(window.innerWidth, window.innerHeight);
     Object.values(subCharts).forEach(sc => sc.chart.resize(window.innerWidth, sc.height));
   });
+
+  // ResizeObserver — catches Compose layout changes that don't fire 'resize'
+  new ResizeObserver(() => {
+    if (chart && container.clientWidth > 0 && container.clientHeight > 0) {
+      chart.resize(container.clientWidth, container.clientHeight);
+      Object.values(subCharts).forEach(sc => sc.chart.resize(container.clientWidth, sc.height));
+    }
+  }).observe(container);
+
+  // Also force an initial resize after a short delay for Android WebView
+  setTimeout(function() {
+    if (chart && container.clientWidth > 0 && container.clientHeight > 0) {
+      chart.resize(container.clientWidth, container.clientHeight);
+    }
+  }, 150);
 }
 
 // ─── Chart Type Switching ───────────────────────────────────────────

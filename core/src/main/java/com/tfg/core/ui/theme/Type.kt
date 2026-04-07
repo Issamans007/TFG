@@ -11,79 +11,66 @@ val TfgTypography = Typography(
     displayLarge = TextStyle(
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
-        lineHeight = 40.sp,
-        color = TextPrimary
+        lineHeight = 40.sp
     ),
     headlineLarge = TextStyle(
         fontWeight = FontWeight.Bold,
         fontSize = 28.sp,
-        lineHeight = 36.sp,
-        color = TextPrimary
+        lineHeight = 36.sp
     ),
     headlineMedium = TextStyle(
         fontWeight = FontWeight.SemiBold,
         fontSize = 24.sp,
-        lineHeight = 32.sp,
-        color = TextPrimary
+        lineHeight = 32.sp
     ),
     headlineSmall = TextStyle(
         fontWeight = FontWeight.SemiBold,
         fontSize = 20.sp,
-        lineHeight = 28.sp,
-        color = TextPrimary
+        lineHeight = 28.sp
     ),
     titleLarge = TextStyle(
         fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp,
-        lineHeight = 26.sp,
-        color = TextPrimary
+        lineHeight = 26.sp
     ),
     titleMedium = TextStyle(
         fontWeight = FontWeight.Medium,
         fontSize = 16.sp,
-        lineHeight = 24.sp,
-        color = TextPrimary
+        lineHeight = 24.sp
     ),
     titleSmall = TextStyle(
         fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
-        lineHeight = 20.sp,
-        color = TextSecondary
+        lineHeight = 20.sp
     ),
     bodyLarge = TextStyle(
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
-        lineHeight = 24.sp,
-        color = TextPrimary
+        lineHeight = 24.sp
     ),
     bodyMedium = TextStyle(
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
-        lineHeight = 20.sp,
-        color = TextSecondary
+        lineHeight = 20.sp
     ),
     bodySmall = TextStyle(
         fontWeight = FontWeight.Normal,
         fontSize = 12.sp,
-        lineHeight = 16.sp,
-        color = TextTertiary
+        lineHeight = 16.sp
     ),
     labelLarge = TextStyle(
         fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
-        lineHeight = 20.sp,
-        color = TextPrimary
+        lineHeight = 20.sp
     ),
     labelMedium = TextStyle(
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
-        lineHeight = 16.sp,
-        color = TextSecondary
+        lineHeight = 16.sp
     ),
     labelSmall = TextStyle(
         fontWeight = FontWeight.Medium,
         fontSize = 10.sp,
-        lineHeight = 14.sp,
-        color = TextTertiary
+        lineHeight = 14.sp
     )
 )

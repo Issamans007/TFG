@@ -38,4 +38,5 @@ include(":feature-settings")
 include(":feature-risk")
 include(":feature-notifications")
 include(":feature-alerts")
+include(":feature-news")
  

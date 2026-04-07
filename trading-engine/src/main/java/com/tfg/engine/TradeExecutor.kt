@@ -8,6 +8,7 @@ import com.tfg.data.remote.api.BinanceApi
 import com.tfg.domain.model.*
 import com.tfg.domain.repository.TradingRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
 import javax.inject.Inject
@@ -36,10 +37,24 @@ class TradeExecutor @Inject constructor(
         (prefs.getStringSet(KEY_TP_LEVELS, null) ?: emptySet()).toMutableSet()
     )
 
+    /** Track which individual SL levels have already fired, keyed by "orderId:slId" */
+    private val executedSlLevels: MutableSet<String> = java.util.Collections.synchronizedSet(
+        (prefs.getStringSet(KEY_SL_LEVELS, null) ?: emptySet()).toMutableSet()
+    )
+
+    /** Orders where breakeven SL is active (SL moved to entry after N TPs hit) */
+    private val breakevenActive: MutableSet<String> = java.util.Collections.synchronizedSet(
+        (prefs.getStringSet(KEY_BREAKEVEN, null) ?: emptySet()).toMutableSet()
+    )
+
     companion object {
         private const val KEY_PEAK_PRICES = "peak_prices"
         private const val KEY_TP_LEVELS = "executed_tp_levels"
-        private const val TICKER_CACHE_TTL_MS = 2_000L // cache ticker for 2s to avoid N+1
+        private const val KEY_SL_LEVELS = "executed_sl_levels"
+        private const val KEY_BREAKEVEN = "breakeven_active"
+        private const val TICKER_CACHE_TTL_MS = 500L // 500ms — tight enough for 1s SL/TP loop
+        private const val FILL_POLL_INTERVAL_MS = 500L
+        private const val FILL_POLL_MAX_ATTEMPTS = 10 // 5s total max wait
     }
 
     /** Per-symbol price cache to avoid N+1 API calls in the 1-second monitoring loop */
@@ -68,6 +83,14 @@ class TradeExecutor @Inject constructor(
         prefs.edit().putStringSet(KEY_TP_LEVELS, synchronized(executedTpLevels) { executedTpLevels.toSet() }).apply()
     }
 
+    private fun persistSlLevels() {
+        prefs.edit().putStringSet(KEY_SL_LEVELS, synchronized(executedSlLevels) { executedSlLevels.toSet() }).apply()
+    }
+
+    private fun persistBreakeven() {
+        prefs.edit().putStringSet(KEY_BREAKEVEN, synchronized(breakevenActive) { breakevenActive.toSet() }).apply()
+    }
+
     suspend fun executeOrder(order: Order): Result<Order> {
         return try {
             // Pre-trade risk checks
@@ -83,14 +106,53 @@ class TradeExecutor @Inject constructor(
                 tradingRepository.placeOrder(order)
             }
             result.onSuccess { placed ->
-                riskEngine.recordTradeResult(placed)
+                TradeHaptics.orderFilled(context)
+                TradeSounds.orderFilled(context)
                 Timber.i("Order placed${if (order.isPaperTrade) " (paper)" else ""}: ${placed.id} ${placed.symbol} ${placed.side}")
+
+                // Confirm fill and record risk with actual fill data
+                val confirmed = confirmFill(placed)
+                riskEngine.recordTradeResult(confirmed)
+
+                val expectedPrice = order.price
+                if (confirmed.filledPrice > 0 && expectedPrice != null && expectedPrice > 0) {
+                    val slippage = (confirmed.filledPrice - expectedPrice) / expectedPrice * 100.0
+                    Timber.i("Fill confirmed: ${confirmed.symbol} fillPrice=%.4f expected=%.4f slippage=%.4f%%"
+                        .format(confirmed.filledPrice, expectedPrice, slippage))
+                }
             }
             result
         } catch (e: Exception) {
             Timber.e(e, "Error executing order")
             Result.failure(e)
         }
+    }
+
+    /**
+     * Poll Binance for actual fill status. For paper trades or already-filled orders,
+     * returns immediately. For live orders, polls up to [FILL_POLL_MAX_ATTEMPTS] times.
+     */
+    private suspend fun confirmFill(placed: Order): Order {
+        // Paper trades are instantly filled
+        if (placed.isPaperTrade) return placed
+        // Already filled at placement time (common for market orders)
+        if (placed.status == OrderStatus.FILLED) return placed
+
+        for (attempt in 1..FILL_POLL_MAX_ATTEMPTS) {
+            delay(FILL_POLL_INTERVAL_MS)
+            try {
+                val queried = tradingRepository.queryOrder(placed.symbol, placed.id).getOrNull()
+                    ?: continue
+                if (queried.status == OrderStatus.FILLED || queried.status == OrderStatus.CANCELLED) {
+                    Timber.i("Fill confirmed after ${attempt} polls: ${queried.symbol} status=${queried.status} fillQty=${queried.filledQuantity} fillPrice=${queried.filledPrice}")
+                    return queried
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Fill poll attempt $attempt failed for ${placed.symbol}")
+            }
+        }
+        Timber.w("Fill confirmation timed out for ${placed.symbol} (${placed.id}) after $FILL_POLL_MAX_ATTEMPTS polls")
+        return placed
     }
 
     suspend fun checkTakeProfits(order: Order) {
@@ -121,8 +183,19 @@ class TradeExecutor @Inject constructor(
                             type = OrderType.MARKET, takeProfits = emptyList(), stopLosses = emptyList()
                         )
                     )
+                    TradeHaptics.takeProfitHit(context)
+                    TradeSounds.takeProfitHit(context)
                     executedTpLevels.add(tpKey)
                     persistTpLevels()
+
+                    // B5: Breakeven-after-TP — move SL to entry after N TPs hit
+                    val config = riskEngine.getRiskConfigSnapshot()
+                    val firedTpCount = order.takeProfits.count { "${order.id}:${it.id}" in executedTpLevels }
+                    if (firedTpCount >= config.breakEvenAfterTpCount && order.id !in breakevenActive) {
+                        breakevenActive.add(order.id)
+                        persistBreakeven()
+                        Timber.i("Breakeven activated for ${order.symbol} (${order.id}) after $firedTpCount TPs")
+                    }
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to execute TP for ${order.symbol}")
                 }
@@ -146,9 +219,23 @@ class TradeExecutor @Inject constructor(
         if (order.stopLosses.isEmpty()) return
         val priceStr = getCachedTickerPrice(order.symbol) ?: return
         val currentPrice = priceStr.toBigDecimal()
+        var allSlsExecuted = true
 
         for (sl in order.stopLosses) {
-            val slPrice = sl.price.toBigDecimal()
+            val slKey = "${order.id}:${sl.id}"
+            if (slKey in executedSlLevels) continue
+
+            allSlsExecuted = false
+            // B5: If breakeven is active, use entry price as SL floor/ceiling
+            val rawSlPrice = sl.price
+            val effectiveSlPrice = if (order.id in breakevenActive) {
+                val entry = order.filledPrice.takeIf { it > 0 } ?: order.price ?: rawSlPrice
+                when (order.side) {
+                    OrderSide.BUY -> maxOf(rawSlPrice, entry)   // long: raise SL to at least entry
+                    OrderSide.SELL -> minOf(rawSlPrice, entry)   // short: lower SL to at most entry
+                }
+            } else rawSlPrice
+            val slPrice = effectiveSlPrice.toBigDecimal()
             val shouldTrigger = when (order.side) {
                 OrderSide.BUY -> currentPrice.compareTo(slPrice) <= 0
                 OrderSide.SELL -> currentPrice.compareTo(slPrice) >= 0
@@ -157,24 +244,38 @@ class TradeExecutor @Inject constructor(
             if (shouldTrigger) {
                 Timber.i("SL triggered for ${order.symbol}: price=$currentPrice, sl=${sl.price}")
                 try {
+                    val closeQty = order.quantity * (sl.quantityPercent / 100.0)
                     val closeSide = if (order.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
                     tradingRepository.placeOrder(
                         order.copy(
-                            id = "", side = closeSide, type = OrderType.MARKET,
+                            id = "", side = closeSide, quantity = closeQty,
+                            type = OrderType.MARKET,
                             takeProfits = emptyList(), stopLosses = emptyList()
                         )
                     )
-                    orderDao.updateStatus(order.id, OrderStatus.FILLED.name)
+                    TradeHaptics.stopLossHit(context)
+                    TradeSounds.stopLossHit(context)
                     riskEngine.recordLoss(order)
-                    peakPrices.remove(order.id)
-                    persistPeakPrices()
-                    // Clean any TP tracking for this order
-                    executedTpLevels.removeAll { it.startsWith("${order.id}:") }
-                    persistTpLevels()
+                    executedSlLevels.add(slKey)
+                    persistSlLevels()
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to execute SL for ${order.symbol}")
                 }
             }
+        }
+
+        if (allSlsExecuted && order.stopLosses.isNotEmpty()) {
+            orderDao.updateStatus(order.id, OrderStatus.FILLED.name)
+            order.stopLosses.forEach { sl -> executedSlLevels.remove("${order.id}:${sl.id}") }
+            persistSlLevels()
+            peakPrices.remove(order.id)
+            persistPeakPrices()
+            executedTpLevels.removeAll { it.startsWith("${order.id}:") }
+            persistTpLevels()
+            breakevenActive.remove(order.id)
+            persistBreakeven()
+        } else if (executedSlLevels.any { it.startsWith("${order.id}:") }) {
+            orderDao.updateStatus(order.id, OrderStatus.PARTIALLY_FILLED.name)
         }
     }
 
@@ -207,6 +308,8 @@ class TradeExecutor @Inject constructor(
 
         if (shouldTrigger) {
             Timber.i("Trailing stop triggered for ${order.symbol} (peak=$peak, trigger=$triggerPrice, current=$currentPrice)")
+            TradeHaptics.stopLossHit(context)
+            TradeSounds.stopLossHit(context)
             try {
                 val closeSide = if (order.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
                 tradingRepository.placeOrder(
@@ -225,6 +328,7 @@ class TradeExecutor @Inject constructor(
     }
 
     suspend fun closeAllPositions() {
+        TradeHaptics.emergencyClose(context)
         val openOrders = orderDao.getOpenOrders().first()
         for (orderEntity in openOrders) {
             try {
@@ -257,6 +361,58 @@ class TradeExecutor @Inject constructor(
                     tradingRepository.cancelOrder(parts[0], parts[1])
                 }
             }
+        }
+    }
+
+    // ─── Conditional Order Execution ────────────────────────────────
+
+    /** Previous ticker prices used for cross-detection */
+    private val prevPrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
+
+    suspend fun checkConditionalOrder(order: Order) {
+        if (order.type != OrderType.CONDITIONAL) return
+        val trigger = order.conditionalTrigger ?: return
+        val priceStr = getCachedTickerPrice(trigger.triggerSymbol) ?: return
+        val currentPrice = priceStr.toDouble()
+        val prevPrice = prevPrices[trigger.triggerSymbol]
+        prevPrices[trigger.triggerSymbol] = currentPrice
+
+        val triggered = when (trigger.condition) {
+            TriggerCondition.PRICE_ABOVE -> currentPrice >= trigger.triggerPrice
+            TriggerCondition.PRICE_BELOW -> currentPrice <= trigger.triggerPrice
+            TriggerCondition.PRICE_CROSSES_ABOVE ->
+                prevPrice != null && prevPrice < trigger.triggerPrice && currentPrice >= trigger.triggerPrice
+            TriggerCondition.PRICE_CROSSES_BELOW ->
+                prevPrice != null && prevPrice > trigger.triggerPrice && currentPrice <= trigger.triggerPrice
+        }
+
+        if (triggered) {
+            Timber.i("Conditional order triggered: ${order.id} on ${order.symbol} (${trigger.condition} ${trigger.triggerPrice})")
+            val marketOrder = order.copy(
+                type = trigger.thenOrderType,
+                price = trigger.thenPrice,
+                conditionalTrigger = null,
+                status = OrderStatus.PENDING
+            )
+            executeOrder(marketOrder)
+            orderDao.updateStatus(order.id, OrderStatus.FILLED.name)
+        }
+    }
+
+    // ─── Time-Based Order Execution ─────────────────────────────────
+
+    suspend fun checkTimeBasedOrder(order: Order) {
+        if (order.type != OrderType.TIME_BASED) return
+        val scheduledAt = order.scheduledAt ?: return
+        if (System.currentTimeMillis() >= scheduledAt) {
+            Timber.i("Time-based order triggered: ${order.id} on ${order.symbol} (scheduled at $scheduledAt)")
+            val marketOrder = order.copy(
+                type = OrderType.MARKET,
+                scheduledAt = null,
+                status = OrderStatus.PENDING
+            )
+            executeOrder(marketOrder)
+            orderDao.updateStatus(order.id, OrderStatus.FILLED.name)
         }
     }
 }

@@ -70,6 +70,14 @@ interface BinanceApi {
         @Query("signature") signature: String
     ): List<OrderResponseDto>
 
+    @GET("api/v3/order")
+    suspend fun queryOrder(
+        @Query("symbol") symbol: String,
+        @Query("origClientOrderId") clientOrderId: String,
+        @Query("timestamp") timestamp: Long,
+        @Query("signature") signature: String
+    ): OrderResponseDto
+
     @POST("api/v3/order/oco")
     @FormUrlEncoded
     suspend fun placeOcoOrder(

@@ -6,6 +6,7 @@ import com.tfg.data.local.dao.SignalMarkerDao;
 import com.tfg.data.remote.websocket.WebSocketManager;
 import com.tfg.domain.model.ScriptExecutor;
 import com.tfg.domain.repository.AuditRepository;
+import com.tfg.domain.repository.MarketRepository;
 import com.tfg.domain.repository.PortfolioRepository;
 import com.tfg.domain.repository.ScriptRepository;
 import com.tfg.domain.repository.SettingsRepository;
@@ -49,6 +50,8 @@ public final class StrategyRunner_Factory implements Factory<StrategyRunner> {
 
   private final Provider<PortfolioRepository> portfolioRepositoryProvider;
 
+  private final Provider<MarketRepository> marketRepositoryProvider;
+
   private final Provider<WebSocketManager> webSocketManagerProvider;
 
   private final Provider<ScriptExecutor> scriptExecutorProvider;
@@ -60,6 +63,7 @@ public final class StrategyRunner_Factory implements Factory<StrategyRunner> {
       Provider<TradeExecutor> tradeExecutorProvider, Provider<RiskEngine> riskEngineProvider,
       Provider<AuditRepository> auditRepositoryProvider,
       Provider<PortfolioRepository> portfolioRepositoryProvider,
+      Provider<MarketRepository> marketRepositoryProvider,
       Provider<WebSocketManager> webSocketManagerProvider,
       Provider<ScriptExecutor> scriptExecutorProvider) {
     this.contextProvider = contextProvider;
@@ -71,13 +75,14 @@ public final class StrategyRunner_Factory implements Factory<StrategyRunner> {
     this.riskEngineProvider = riskEngineProvider;
     this.auditRepositoryProvider = auditRepositoryProvider;
     this.portfolioRepositoryProvider = portfolioRepositoryProvider;
+    this.marketRepositoryProvider = marketRepositoryProvider;
     this.webSocketManagerProvider = webSocketManagerProvider;
     this.scriptExecutorProvider = scriptExecutorProvider;
   }
 
   @Override
   public StrategyRunner get() {
-    return newInstance(contextProvider.get(), scriptRepositoryProvider.get(), settingsRepositoryProvider.get(), candleDaoProvider.get(), signalMarkerDaoProvider.get(), tradeExecutorProvider.get(), riskEngineProvider.get(), auditRepositoryProvider.get(), portfolioRepositoryProvider.get(), webSocketManagerProvider.get(), scriptExecutorProvider.get());
+    return newInstance(contextProvider.get(), scriptRepositoryProvider.get(), settingsRepositoryProvider.get(), candleDaoProvider.get(), signalMarkerDaoProvider.get(), tradeExecutorProvider.get(), riskEngineProvider.get(), auditRepositoryProvider.get(), portfolioRepositoryProvider.get(), marketRepositoryProvider.get(), webSocketManagerProvider.get(), scriptExecutorProvider.get());
   }
 
   public static StrategyRunner_Factory create(Provider<Context> contextProvider,
@@ -87,16 +92,17 @@ public final class StrategyRunner_Factory implements Factory<StrategyRunner> {
       Provider<TradeExecutor> tradeExecutorProvider, Provider<RiskEngine> riskEngineProvider,
       Provider<AuditRepository> auditRepositoryProvider,
       Provider<PortfolioRepository> portfolioRepositoryProvider,
+      Provider<MarketRepository> marketRepositoryProvider,
       Provider<WebSocketManager> webSocketManagerProvider,
       Provider<ScriptExecutor> scriptExecutorProvider) {
-    return new StrategyRunner_Factory(contextProvider, scriptRepositoryProvider, settingsRepositoryProvider, candleDaoProvider, signalMarkerDaoProvider, tradeExecutorProvider, riskEngineProvider, auditRepositoryProvider, portfolioRepositoryProvider, webSocketManagerProvider, scriptExecutorProvider);
+    return new StrategyRunner_Factory(contextProvider, scriptRepositoryProvider, settingsRepositoryProvider, candleDaoProvider, signalMarkerDaoProvider, tradeExecutorProvider, riskEngineProvider, auditRepositoryProvider, portfolioRepositoryProvider, marketRepositoryProvider, webSocketManagerProvider, scriptExecutorProvider);
   }
 
   public static StrategyRunner newInstance(Context context, ScriptRepository scriptRepository,
       SettingsRepository settingsRepository, CandleDao candleDao, SignalMarkerDao signalMarkerDao,
       TradeExecutor tradeExecutor, RiskEngine riskEngine, AuditRepository auditRepository,
-      PortfolioRepository portfolioRepository, WebSocketManager webSocketManager,
-      ScriptExecutor scriptExecutor) {
-    return new StrategyRunner(context, scriptRepository, settingsRepository, candleDao, signalMarkerDao, tradeExecutor, riskEngine, auditRepository, portfolioRepository, webSocketManager, scriptExecutor);
+      PortfolioRepository portfolioRepository, MarketRepository marketRepository,
+      WebSocketManager webSocketManager, ScriptExecutor scriptExecutor) {
+    return new StrategyRunner(context, scriptRepository, settingsRepository, candleDao, signalMarkerDao, tradeExecutor, riskEngine, auditRepository, portfolioRepository, marketRepository, webSocketManager, scriptExecutor);
   }
 }

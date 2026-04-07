@@ -29,6 +29,7 @@ import com.tfg.feature.script.ScriptScreen
 import com.tfg.feature.settings.SettingsScreen
 import com.tfg.feature.trade.TradeScreen
 import com.tfg.feature.alerts.AlertsScreen
+import com.tfg.feature.news.NewsScreen
 
 // Routes
 object Routes {
@@ -50,6 +51,7 @@ object Routes {
     const val RISK = "risk"
     const val NOTIFICATIONS = "notifications"
     const val ALERTS = "alerts"
+    const val NEWS = "news"
 
     fun trade(symbol: String) = "trade/$symbol"
     fun chart(symbol: String) = "chart/$symbol"
@@ -60,6 +62,7 @@ object Routes {
 enum class BottomNavItem(val route: String, val icon: ImageVector, val label: String) {
     DASHBOARD(Routes.DASHBOARD, Icons.Default.Home, "Home"),
     MARKETS(Routes.MARKETS, Icons.Default.ShowChart, "Markets"),
+    NEWS(Routes.NEWS, Icons.Default.Newspaper, "News"),
     PORTFOLIO(Routes.PORTFOLIO, Icons.Default.AccountBalance, "Portfolio"),
     SCRIPT(Routes.SCRIPT, Icons.Default.Code, "Scripts"),
     SETTINGS(Routes.SETTINGS, Icons.Default.Settings, "Settings")
@@ -71,13 +74,14 @@ fun AppNavGraph() {
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
 
     val showBottomBar = currentRoute in BottomNavItem.entries.map { it.route }
+    val colors = com.tfg.core.ui.theme.TfgTheme.colors
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        containerColor = DarkBackground,
+        containerColor = colors.background,
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar(containerColor = DarkSurface, tonalElevation = 0.dp) {
+                NavigationBar(containerColor = colors.surface, tonalElevation = 0.dp) {
                     BottomNavItem.entries.forEach { item ->
                         NavigationBarItem(
                             selected = currentRoute == item.route,
@@ -93,8 +97,8 @@ fun AppNavGraph() {
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = AccentBlue,
                                 selectedTextColor = AccentBlue,
-                                unselectedIconColor = TextTertiary,
-                                unselectedTextColor = TextTertiary,
+                                unselectedIconColor = colors.textTertiary,
+                                unselectedTextColor = colors.textTertiary,
                                 indicatorColor = AccentBlue.copy(alpha = 0.1f)
                             )
                         )
@@ -198,6 +202,7 @@ fun AppNavGraph() {
                 )
             }
 
+            composable(Routes.NEWS) { NewsScreen() }
             composable(Routes.RISK) { RiskScreen() }
             composable(Routes.NOTIFICATIONS) { NotificationsScreen() }
             composable(Routes.ALERTS) { AlertsScreen(onBack = { navController.popBackStack() }) }

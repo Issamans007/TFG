@@ -35,6 +35,7 @@ class RiskEngine @Inject constructor(
     private var consecutiveLosses = prefs.getInt(KEY_CONSECUTIVE_LOSSES, 0)
     private var peakEquity = prefs.getFloat(KEY_PEAK_EQUITY, 0f).toDouble()
     private var cachedPortfolio = Portfolio()
+    private var lastAtrPercent = 0.0
 
     init {
         // Auto-reset daily counters if the day changed since last save
@@ -61,7 +62,15 @@ class RiskEngine @Inject constructor(
         updateEquity(portfolio.totalBalance)
     }
 
+    /** Push latest ATR% so volatility pause can be checked. */
+    fun updateVolatility(atrPercent: Double) {
+        lastAtrPercent = atrPercent
+    }
+
     override fun getRiskConfig(): Flow<RiskConfig> = _config.asStateFlow()
+
+    /** Synchronous snapshot for non-suspend callers (e.g. TradeExecutor TP/SL checks). */
+    fun getRiskConfigSnapshot(): RiskConfig = _config.value
 
     override suspend fun updateRiskConfig(config: RiskConfig) {
         _config.value = config
@@ -202,6 +211,15 @@ class RiskEngine @Inject constructor(
             }
         }
 
+        // B6: Volatility pause — block if ATR% exceeds threshold
+        if (config.volatilityPauseThreshold > 0 && lastAtrPercent > config.volatilityPauseThreshold) {
+            violations.add(RiskViolation(
+                "VOLATILITY_PAUSE",
+                "Market volatility ${String.format("%.2f", lastAtrPercent)}% exceeds pause threshold ${config.volatilityPauseThreshold}%",
+                RiskSeverity.BLOCK
+            ))
+        }
+
         val hasBlocker = violations.any { it.severity == RiskSeverity.BLOCK || it.severity == RiskSeverity.EMERGENCY }
         return RiskCheckResult(!hasBlocker, violations)
     }
@@ -265,8 +283,6 @@ class RiskEngine @Inject constructor(
 
     fun recordTradeResult(order: Order) {
         val pnl = order.realizedPnl
-        // Skip recording when PnL is zero (order just placed, not yet settled)
-        if (pnl == 0.0) return
         updateTradeResult(pnl)
         Timber.d("Recorded trade result: ${order.id}, PnL: $pnl")
     }

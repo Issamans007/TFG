@@ -805,29 +805,105 @@ object StrategyEvaluator {
     }
 
     private fun evaluateGainzAlgo(candles: List<Candle>, params: Map<String, String>, ctx: EvalContext): StrategySignal {
-        val stabTh = params.dbl("CANDLE_STABILITY_INDEX", 0.5)
-        val rsiUp = params.dbl("RSI_UPPER", 70.0); val rsiLow = params.dbl("RSI_LOWER", 30.0)
-        val deltaLen = params.int("CANDLE_DELTA_LENGTH", 4)
-        val tpSlM = params.dbl("TP_SL_MULTIPLIER", 1.0); val rrr = params.dbl("RISK_REWARD_RATIO", 2.0)
+        // ── Core params ──
+        val stabTh = params.dbl("CANDLE_STABILITY", 0.5)
+        val rsiP = params.int("RSI_PERIOD", 14)
+        val rsiBuyMax = params.dbl("RSI_BUY_MAX", 55.0)
+        val rsiSellMin = params.dbl("RSI_SELL_MIN", 45.0)
+        val deltaLen = params.int("DELTA_LENGTH", 4)
+
+        // ── Trend filter ──
+        val useTrend = params.int("USE_TREND_FILTER", 1) == 1
+        val emaFastLen = params.int("EMA_FAST", 50)
+        val emaSlowLen = params.int("EMA_SLOW", 200)
+
+        // ── Volume filter ──
+        val useVol = params.int("USE_VOLUME_FILTER", 1) == 1
+        val volLookback = params.int("VOL_LOOKBACK", 20)
+        val volMult = params.dbl("VOL_MULTIPLIER", 1.0)
+
+        // ── MACD filter ──
+        val useMacd = params.int("USE_MACD_FILTER", 0) == 1
+        val macdFast = params.int("MACD_FAST", 12)
+        val macdSlow = params.int("MACD_SLOW", 26)
+
+        // ── ADX filter ──
+        val useAdx = params.int("USE_ADX_FILTER", 0) == 1
+        val adxPeriod = params.int("ADX_PERIOD", 14)
+        val adxThresh = params.dbl("ADX_THRESHOLD", 20.0)
+
+        // ── Risk ──
+        val tpSlM = params.dbl("TP_SL_MULTIPLIER", 1.0)
+        val rrr = params.dbl("RISK_REWARD_RATIO", 2.0)
         val size = params.dbl("POSITION_SIZE_PCT", 2.0)
-        if (candles.size < deltaLen + 11) return StrategySignal.HOLD
-        val last = candles.last(); val prev = candles[candles.size - 2]; val deltaRef = candles[candles.size - 1 - deltaLen]
+
+        // Only require EMA_SLOW bars when trend filter is on
+        val minBars = if (useTrend) maxOf(emaSlowLen + 5, 52) else maxOf(deltaLen + 15, 30)
+        if (candles.size < minBars) return StrategySignal.HOLD
+
+        val last = candles.last(); val prev = candles[candles.size - 2]
+        val deltaRef = candles[candles.size - 1 - deltaLen]
+        val price = last.close
+
+        // ── Candle stability ──
         val tr = maxOf(last.high - last.low, Math.abs(last.high - prev.close), Math.abs(last.low - prev.close))
         val stable = tr > 0.0 && Math.abs(last.close - last.open) / tr > stabTh
-        val r = rsi(candles, 14); val a = atr(candles, 14)
-        val dist = a * tpSlM; val price = last.close
+        if (!stable) return StrategySignal.HOLD
+
+        // ── Engulfing patterns ──
         val bullEng = prev.close < prev.open && last.close > last.open && last.close > prev.open
-        if (bullEng && stable && r < rsiUp && last.close < deltaRef.close && ctx.lastSignalType != "buy") {
+        val bearEng = prev.close > prev.open && last.close < last.open && last.close < prev.open
+        if (!bullEng && !bearEng) return StrategySignal.HOLD
+
+        // ── RSI ──
+        val r = rsi(candles, rsiP)
+
+        // ── Trend filter: EMA alignment only (allows pullback entries) ──
+        var trendBull = true; var trendBear = true
+        if (useTrend) {
+            val ef = ema(candles, emaFastLen); val es = ema(candles, emaSlowLen)
+            // Only require EMA alignment — do NOT require price > EMA
+            // This allows "buy the dip in an uptrend" (engulfing + dip + uptrend)
+            trendBull = ef > es
+            trendBear = ef < es
+        }
+
+        // ── Volume confirmation ──
+        if (useVol && candles.size > volLookback + 1) {
+            val avgVol = candles.subList(candles.size - volLookback - 1, candles.size - 1).map { it.volume }.average()
+            if (avgVol > 0 && last.volume < avgVol * volMult) return StrategySignal.HOLD
+        }
+
+        // ── MACD histogram direction ──
+        var macdBull = true; var macdBear = true
+        if (useMacd) {
+            val macdNow = ema(candles, macdFast) - ema(candles, macdSlow)
+            val macdPrev = ema(candles.dropLast(1), macdFast) - ema(candles.dropLast(1), macdSlow)
+            macdBull = macdNow > macdPrev
+            macdBear = macdNow < macdPrev
+        }
+
+        // ── ADX strength ──
+        if (useAdx && adx(candles, adxPeriod) < adxThresh) return StrategySignal.HOLD
+
+        // ── TP/SL ──
+        val a = atr(candles, 14); val dist = a * tpSlM
+        val slPct = if (price > 0) dist / price * 100 else 2.0
+
+        // ── BUY: engulfing + RSI<55 + price dip + EMA uptrend + volume ──
+        if (bullEng && r < rsiBuyMax && last.close < deltaRef.close
+            && trendBull && macdBull && ctx.lastSignalType != "buy") {
             ctx.lastSignalType = "buy"
-            val slPct = if (price > 0) dist / price * 100 else 2.0
             return StrategySignal.BUY(sizePct = size, stopLossPct = slPct, takeProfitPct = slPct * rrr)
         }
-        val bearEng = prev.close > prev.open && last.close < last.open && last.close < prev.open
-        if (bearEng && stable && r > rsiLow && last.close > deltaRef.close && ctx.lastSignalType != "sell") {
+
+        // ── SELL: engulfing + RSI>45 + price rise + EMA downtrend + volume ──
+        if (bearEng && r > rsiSellMin && last.close > deltaRef.close
+            && trendBear && macdBear && ctx.lastSignalType != "sell") {
             ctx.lastSignalType = "sell"
-            val slPct = if (price > 0) dist / price * 100 else 2.0
             return StrategySignal.SELL(sizePct = 100.0, stopLossPct = slPct, takeProfitPct = slPct * rrr)
         }
+
         return StrategySignal.HOLD
     }
 
@@ -1252,7 +1328,8 @@ object StrategyEvaluator {
     fun backtest(
         templateId: String, candles: List<Candle>, symbol: String, interval: String,
         params: Map<String, String> = emptyMap(), startingCapital: Double = 10000.0,
-        backtestDays: Int = 0, onProgress: (Float) -> Unit = {}
+        backtestDays: Int = 0, makerFeePct: Double = 0.001, takerFeePct: Double = 0.001,
+        slippagePct: Double = 0.0, onProgress: (Float) -> Unit = {}
     ): Pair<BacktestResult, List<SignalMarker>> {
         if (candles.size < 50) return Pair(
             BacktestResult("", symbol, interval, 0, 0, 0, 0.0, 0.0, 0.0, 0.0), emptyList()
@@ -1261,7 +1338,8 @@ object StrategyEvaluator {
         val trades = mutableListOf<BacktestTrade>()
         val signals = mutableListOf<SignalMarker>()
         var position: BacktestPosition? = null
-        val feePct = 0.001
+        val feePct = (makerFeePct + takerFeePct) / 2.0  // blended entry/exit fee
+        val slipFraction = slippagePct / 100.0
         var equity = startingCapital
         val equityCurve = mutableListOf(equity)
         val ctx = EvalContext()
@@ -1374,28 +1452,31 @@ object StrategyEvaluator {
             when (signal) {
                 is StrategySignal.BUY -> {
                     if (position != null && position!!.side == OrderSide.SELL) {
-                        // Close short first
+                        // Close short first — slippage worsens exit (buy to cover at higher price)
                         val pos = position!!
-                        val pnl = (pos.entryPrice - bar.close) * pos.qty
-                        val fee = (pos.entryPrice * pos.qty + bar.close * pos.qty) * feePct
+                        val exitPrice = bar.close * (1.0 + slipFraction)
+                        val pnl = (pos.entryPrice - exitPrice) * pos.qty
+                        val fee = (pos.entryPrice * pos.qty + exitPrice * pos.qty) * feePct
                         equity += pnl - fee
                         trades.add(BacktestTrade(pos.entryTime, bar.openTime, pos.side, pos.entryPrice,
-                            bar.close, pos.qty, pnl - fee, fee, i - pos.entryBar))
+                            exitPrice, pos.qty, pnl - fee, fee, i - pos.entryBar))
                         signals.add(SignalMarker("__CS", "", symbol, interval,
                             bar.openTime, SignalType.BUY, bar.close))
                         position = null
                     }
                     if (position == null) {
-                        val qty = (equity * signal.sizePct / 100.0) / bar.close
-                        val slPrice = signal.stopLossPct?.let { bar.close * (1.0 - it / 100.0) }
-                        val tpPrice = signal.takeProfitPct?.let { bar.close * (1.0 + it / 100.0) }
+                        // Slippage worsens entry: buy at higher price
+                        val entryPrice = bar.close * (1.0 + slipFraction)
+                        val qty = (equity * signal.sizePct / 100.0) / entryPrice
+                        val slPrice = signal.stopLossPct?.let { entryPrice * (1.0 - it / 100.0) }
+                        val tpPrice = signal.takeProfitPct?.let { entryPrice * (1.0 + it / 100.0) }
                         val tpLevels = signal.takeProfitLevels.map { lvl ->
-                            Pair(bar.close * (1.0 + lvl.pct / 100.0), lvl.quantityPct / 100.0)
+                            Pair(entryPrice * (1.0 + lvl.pct / 100.0), lvl.quantityPct / 100.0)
                         }
                         val slLevels = signal.stopLossLevels.map { lvl ->
-                            Pair(bar.close * (1.0 - lvl.pct / 100.0), lvl.quantityPct / 100.0)
+                            Pair(entryPrice * (1.0 - lvl.pct / 100.0), lvl.quantityPct / 100.0)
                         }
-                        position = BacktestPosition(OrderSide.BUY, bar.close, qty, bar.openTime, i,
+                        position = BacktestPosition(OrderSide.BUY, entryPrice, qty, bar.openTime, i,
                             slPrice, tpPrice, tpLevels, slLevels)
                         signals.add(SignalMarker("__B", "", symbol, interval,
                             bar.openTime, SignalType.BUY, bar.close))
@@ -1403,29 +1484,31 @@ object StrategyEvaluator {
                 }
                 is StrategySignal.SELL -> {
                     if (position != null && position!!.side == OrderSide.BUY) {
-                        // Close long
+                        // Close long — slippage worsens exit (sell at lower price)
                         val pos = position!!
-                        val pnl = (bar.close - pos.entryPrice) * pos.qty
-                        val fee = (pos.entryPrice * pos.qty + bar.close * pos.qty) * feePct
+                        val exitPrice = bar.close * (1.0 - slipFraction)
+                        val pnl = (exitPrice - pos.entryPrice) * pos.qty
+                        val fee = (pos.entryPrice * pos.qty + exitPrice * pos.qty) * feePct
                         equity += pnl - fee
                         trades.add(BacktestTrade(pos.entryTime, bar.openTime, pos.side, pos.entryPrice,
-                            bar.close, pos.qty, pnl - fee, fee, i - pos.entryBar))
+                            exitPrice, pos.qty, pnl - fee, fee, i - pos.entryBar))
                         signals.add(SignalMarker("__S", "", symbol, interval,
                             bar.openTime, SignalType.SELL, bar.close))
                         position = null
                     }
                     if (position == null) {
-                        // Open short
-                        val qty = (equity * signal.sizePct / 100.0) / bar.close
-                        val slPrice = signal.stopLossPct?.let { bar.close * (1.0 + it / 100.0) }
-                        val tpPrice = signal.takeProfitPct?.let { bar.close * (1.0 - it / 100.0) }
+                        // Open short — slippage worsens entry (sell at lower price)
+                        val entryPrice = bar.close * (1.0 - slipFraction)
+                        val qty = (equity * signal.sizePct / 100.0) / entryPrice
+                        val slPrice = signal.stopLossPct?.let { entryPrice * (1.0 + it / 100.0) }
+                        val tpPrice = signal.takeProfitPct?.let { entryPrice * (1.0 - it / 100.0) }
                         val tpLevels = signal.takeProfitLevels.map { lvl ->
-                            Pair(bar.close * (1.0 - lvl.pct / 100.0), lvl.quantityPct / 100.0)
+                            Pair(entryPrice * (1.0 - lvl.pct / 100.0), lvl.quantityPct / 100.0)
                         }
                         val slLevels = signal.stopLossLevels.map { lvl ->
-                            Pair(bar.close * (1.0 + lvl.pct / 100.0), lvl.quantityPct / 100.0)
+                            Pair(entryPrice * (1.0 + lvl.pct / 100.0), lvl.quantityPct / 100.0)
                         }
-                        position = BacktestPosition(OrderSide.SELL, bar.close, qty, bar.openTime, i,
+                        position = BacktestPosition(OrderSide.SELL, entryPrice, qty, bar.openTime, i,
                             slPrice, tpPrice, tpLevels, slLevels)
                         signals.add(SignalMarker("__SH", "", symbol, interval,
                             bar.openTime, SignalType.SELL, bar.close))
@@ -1434,11 +1517,12 @@ object StrategyEvaluator {
                 is StrategySignal.CLOSE_IF_LONG -> {
                     if (position != null && position!!.side == OrderSide.BUY) {
                         val pos = position!!
-                        val pnl = (bar.close - pos.entryPrice) * pos.qty
-                        val fee = (pos.entryPrice * pos.qty + bar.close * pos.qty) * feePct
+                        val exitPrice = bar.close * (1.0 - slipFraction)
+                        val pnl = (exitPrice - pos.entryPrice) * pos.qty
+                        val fee = (pos.entryPrice * pos.qty + exitPrice * pos.qty) * feePct
                         equity += pnl - fee
                         trades.add(BacktestTrade(pos.entryTime, bar.openTime, pos.side, pos.entryPrice,
-                            bar.close, pos.qty, pnl - fee, fee, i - pos.entryBar))
+                            exitPrice, pos.qty, pnl - fee, fee, i - pos.entryBar))
                         signals.add(SignalMarker("__CL", "", symbol, interval,
                             bar.openTime, SignalType.CLOSE, bar.close))
                         position = null
@@ -1447,11 +1531,12 @@ object StrategyEvaluator {
                 is StrategySignal.CLOSE_IF_SHORT -> {
                     if (position != null && position!!.side == OrderSide.SELL) {
                         val pos = position!!
-                        val pnl = (pos.entryPrice - bar.close) * pos.qty
-                        val fee = (pos.entryPrice * pos.qty + bar.close * pos.qty) * feePct
+                        val exitPrice = bar.close * (1.0 + slipFraction)
+                        val pnl = (pos.entryPrice - exitPrice) * pos.qty
+                        val fee = (pos.entryPrice * pos.qty + exitPrice * pos.qty) * feePct
                         equity += pnl - fee
                         trades.add(BacktestTrade(pos.entryTime, bar.openTime, pos.side, pos.entryPrice,
-                            bar.close, pos.qty, pnl - fee, fee, i - pos.entryBar))
+                            exitPrice, pos.qty, pnl - fee, fee, i - pos.entryBar))
                         signals.add(SignalMarker("__CSH", "", symbol, interval,
                             bar.openTime, SignalType.CLOSE, bar.close))
                         position = null
@@ -1515,6 +1600,9 @@ object StrategyEvaluator {
         val avgRet = if (returns.isNotEmpty()) returns.average() else 0.0
         val stdRet = if (returns.size > 1) stdDev(returns) else 1.0
         val sharpe = if (stdRet > 0) avgRet / stdRet * Math.sqrt(periodsPerYear) else 0.0
+        val downsideReturns = returns.filter { it < 0.0 }
+        val downsideDev = if (downsideReturns.size > 1) Math.sqrt(downsideReturns.sumOf { it * it } / downsideReturns.size) else 0.0
+        val sortino = if (downsideDev > 0) avgRet / downsideDev * Math.sqrt(periodsPerYear) else 0.0
 
         val expectancy = if (trades.isNotEmpty())
             (winRate / 100.0 * avgWin) + ((100.0 - winRate) / 100.0 * avgLoss) else 0.0
@@ -1528,7 +1616,7 @@ object StrategyEvaluator {
             scriptId = "", symbol = symbol, timeframe = interval,
             startDate = candles.first().openTime, endDate = candles.last().openTime,
             totalTrades = trades.size, winRate = winRate, totalPnl = totalPnl,
-            maxDrawdown = maxDrawdown, sharpeRatio = sharpe, trades = trades,
+            maxDrawdown = maxDrawdown, sharpeRatio = sharpe, sortinoRatio = sortino, trades = trades,
             profitFactor = profitFactor, buyAndHoldReturn = buyAndHold,
             avgBarsInTrade = avgBars, grossProfit = grossProfit, grossLoss = grossLoss,
             maxConsecutiveWins = maxCW, maxConsecutiveLosses = maxCL,
