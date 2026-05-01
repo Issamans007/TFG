@@ -20,6 +20,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -165,7 +166,10 @@ fun CoinDetailScreen(
                     ichimokuData = ichimokuData,
                     cloudOverlays = cloudOverlays,
                     customIndicatorOutputs = state.indicatorOutputs,
+                    strategyPlotJson = state.strategyPlotJson,
+                    dashboardJson = state.dashboardOverlayJson,
                     chartType = state.chartType,
+                    symbol = state.symbol,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 4.dp)
@@ -550,9 +554,9 @@ fun CoinDetailScreen(
                         drawCurve(bh, androidx.compose.ui.graphics.Color(0xFFFFA726))
                     }
                     Spacer(modifier = Modifier.height(4.dp))
-                    val stratReturn = if (state.strategyEquityCurve.size >= 2)
+                    val stratReturn = if (state.strategyEquityCurve.size >= 2 && state.strategyEquityCurve.first() > 0.0)
                         ((state.strategyEquityCurve.last() - state.strategyEquityCurve.first()) / state.strategyEquityCurve.first() * 100) else 0.0
-                    val bhReturn = if (state.buyAndHoldEquityCurve.size >= 2)
+                    val bhReturn = if (state.buyAndHoldEquityCurve.size >= 2 && state.buyAndHoldEquityCurve.first() > 0.0)
                         ((state.buyAndHoldEquityCurve.last() - state.buyAndHoldEquityCurve.first()) / state.buyAndHoldEquityCurve.first() * 100) else 0.0
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         Text("Strategy: ${String.format("%.2f", stratReturn)}%", fontSize = 11.sp, color = if (stratReturn >= 0) Green400 else Red400)
@@ -836,6 +840,36 @@ private fun ChartScriptPanel(
                 }
             }
 
+            // Backtest days selector
+            Text("Backtest Period", fontSize = 11.sp, color = TextSecondary, fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(bottom = 4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(3, 7, 30, 90, 180).forEach { d ->
+                    val selected = state.backtestDays == d
+                    Surface(
+                        onClick = { viewModel.updateBacktestDays(d) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (selected) AccentBlue else DarkCard,
+                        border = if (selected) null else BorderStroke(1.dp, DarkBorder),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = if (d < 30) "${d}d" else if (d < 365) "${d}d" else "${d / 365}y",
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (selected) Color.White else TextSecondary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
             // Backtest button + stop
             if (state.isBacktesting) {
                 Row(
@@ -1035,7 +1069,196 @@ private fun ChartScriptPanel(
                     }
                 }
             }
+
+            // ─── TFG ALGO Dashboard ────────────────────────────────
+            state.tfgDashboard?.let { dash ->
+                TfgDashboardPanel(dash)
+            }
         }
+    }
+}
+
+// ─── TFG ALGO 10-Factor Dashboard ──────────────────────────────────
+
+@Composable
+private fun TfgDashboardPanel(dashboard: TfgDashboardData) {
+    var expanded by remember { mutableStateOf(true) }
+    TfgCard(modifier = Modifier.padding(vertical = 4.dp)) {
+        Column {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("TFG ALGO", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = AccentBlue)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (dashboard.inPosition) Green400.copy(alpha = 0.2f) else DarkSurface
+                    ) {
+                        Text(
+                            if (dashboard.inPosition) "IN TRADE" else "WATCHING",
+                            fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
+                            color = if (dashboard.inPosition) Green400 else TextTertiary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Score badge
+                    val scoreColor = when {
+                        dashboard.score >= 8 -> Green400
+                        dashboard.score >= 6 -> AccentGold
+                        else -> Red400
+                    }
+                    Surface(shape = RoundedCornerShape(6.dp), color = scoreColor.copy(alpha = 0.15f)) {
+                        Text(
+                            "${dashboard.score}/10",
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = scoreColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        null, modifier = Modifier.size(18.dp), tint = TextTertiary
+                    )
+                }
+            }
+
+            // P&L row
+            if (dashboard.inPosition) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (dashboard.pnlPct >= 0) Green400.copy(alpha = 0.08f) else Red400.copy(alpha = 0.08f),
+                            RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Unrealized P&L", fontSize = 10.sp, color = TextSecondary)
+                    Text(
+                        "${String.format("%+.2f", dashboard.pnlPct)}%",
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = if (dashboard.pnlPct >= 0) Green400 else Red400
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column(modifier = Modifier.padding(top = 6.dp)) {
+                    // Table header
+                    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                        Text("Factor", fontSize = 9.sp, color = TextTertiary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1.4f))
+                        Text("", fontSize = 9.sp, modifier = Modifier.weight(0.4f))
+                        Text("Status", fontSize = 9.sp, color = TextTertiary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1.2f))
+                    }
+                    HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
+
+                    // 10 confluence rows
+                    DashRow("EMA Trend", dashboard.cTrend, if (dashboard.cTrend) "Bullish" else "Bearish")
+                    DashRow("VWAP", dashboard.cVwap, if (dashboard.cVwap) "Above" else "Below")
+                    DashRow("Volume", dashboard.cVolume, if (dashboard.cVolume) "Spike" else "Normal")
+                    DashRow("RSI Momentum", dashboard.cRsi, String.format("%.1f", dashboard.rsiVal))
+                    DashRow("MACD", dashboard.cMacd, if (dashboard.cMacd) "Bullish X" else "Bearish")
+                    DashRow("Candle Pattern", dashboard.cCandle,
+                        when {
+                            dashboard.bullEngulf -> "Engulfing"
+                            dashboard.bullPinBar -> "Pin Bar"
+                            dashboard.strongBull -> "Strong Bull"
+                            else -> "None"
+                        }
+                    )
+                    DashRow("S/R Proximity", dashboard.cSupport,
+                        if (dashboard.supportLevel != null) String.format("S:%.2f", dashboard.supportLevel) else "—"
+                    )
+                    DashRow("DI+/DI−", dashboard.cDi,
+                        String.format("+%.1f / −%.1f", dashboard.diPlus, dashboard.diMinus)
+                    )
+                    DashRow("ADX Trend", dashboard.cAdx, String.format("%.1f", dashboard.adxVal))
+                    DashRow("Breakout", dashboard.cBreakout, if (dashboard.cBreakout) "Yes" else "No")
+
+                    HorizontalDivider(color = DarkBorder, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                    // Score row
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Score", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1.4f))
+                        Spacer(modifier = Modifier.weight(0.4f))
+                        val readyColor = if (dashboard.score >= 6) Green400 else AccentGold
+                        Text(
+                            "${dashboard.score}/10 ${if (dashboard.score >= 6) "READY" else "WAIT"}",
+                            fontSize = 11.sp, fontWeight = FontWeight.Bold, color = readyColor,
+                            modifier = Modifier.weight(1.2f)
+                        )
+                    }
+
+                    // HTF row
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("HTF Trend", fontSize = 10.sp, color = TextSecondary, modifier = Modifier.weight(1.4f))
+                        Spacer(modifier = Modifier.weight(0.4f))
+                        Text(
+                            if (dashboard.htfBull) "BULL" else "BEAR",
+                            fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                            color = if (dashboard.htfBull) Green400 else Red400,
+                            modifier = Modifier.weight(1.2f)
+                        )
+                    }
+
+                    // S/R levels
+                    if (dashboard.supportLevel != null || dashboard.resistanceLevel != null) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("S/R Levels", fontSize = 10.sp, color = TextSecondary, modifier = Modifier.weight(1.4f))
+                            Spacer(modifier = Modifier.weight(0.4f))
+                            Text(
+                                buildString {
+                                    dashboard.supportLevel?.let { append("S:${String.format("%.2f", it)}") }
+                                    if (dashboard.supportLevel != null && dashboard.resistanceLevel != null) append(" / ")
+                                    dashboard.resistanceLevel?.let { append("R:${String.format("%.2f", it)}") }
+                                },
+                                fontSize = 10.sp, color = AccentGold,
+                                modifier = Modifier.weight(1.2f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashRow(label: String, pass: Boolean, status: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 10.sp, color = TextSecondary, modifier = Modifier.weight(1.4f))
+        Text(
+            if (pass) "✓" else "✗",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (pass) Green400 else Red400,
+            modifier = Modifier.weight(0.4f)
+        )
+        Text(status, fontSize = 10.sp, color = if (pass) Green400 else TextTertiary, modifier = Modifier.weight(1.2f))
     }
 }
 

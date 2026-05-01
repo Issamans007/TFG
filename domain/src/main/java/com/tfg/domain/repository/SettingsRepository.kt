@@ -38,4 +38,14 @@ interface SettingsRepository {
     suspend fun saveApiCredentials(apiKey: String, apiSecret: String)
     suspend fun getApiKey(): String?
     suspend fun getApiSecret(): String?
+
+    // ── Futures settings (defaults preserve spot behavior) ─────────
+    suspend fun isFuturesEnabled(): Boolean = false
+    suspend fun setFuturesEnabled(enabled: Boolean) {}
+    suspend fun getDefaultLeverage(): Int = 1
+    suspend fun setDefaultLeverage(leverage: Int) {}
+    suspend fun getDefaultMarginType(): MarginType = MarginType.ISOLATED
+    suspend fun setDefaultMarginType(type: MarginType) {}
+    suspend fun getMaxLeverage(): Int = 20
+    suspend fun setMaxLeverage(leverage: Int) {}
 }

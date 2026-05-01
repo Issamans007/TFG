@@ -1,6 +1,8 @@
 package com.tfg.feature.settings
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tfg.core.util.HapticManager
@@ -86,23 +88,52 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun toggleBot(enabled: Boolean) {
+        // Update UI immediately so the Switch reflects the user's tap.
+        _state.update { it.copy(botEnabled = enabled) }
+        // Actually start/stop the 24/7 foreground service (was missing — bot
+        // would never start unless the device rebooted).
+        startOrStopTradingService(enabled)
         viewModelScope.launch {
             settingsRepository.setBotEnabled(enabled)
-            _state.update { it.copy(botEnabled = enabled) }
+        }
+    }
+
+    private fun startOrStopTradingService(enabled: Boolean) {
+        // Reference TradingForegroundService by class name to avoid a module
+        // dependency on trading-engine from feature-settings.
+        val component = ComponentName(
+            context.packageName,
+            "com.tfg.engine.TradingForegroundService"
+        )
+        val intent = Intent().apply {
+            this.component = component
+            action = if (enabled) "com.tfg.engine.START" else "com.tfg.engine.STOP"
+        }
+        try {
+            if (enabled) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(error = "Failed to ${if (enabled) "start" else "stop"} bot: ${e.message}") }
         }
     }
 
     fun togglePaperTrading(enabled: Boolean) {
+        // Update UI first for immediate feedback.
+        _state.update { it.copy(paperTrading = enabled) }
         viewModelScope.launch {
             settingsRepository.setPaperTrading(enabled)
-            _state.update { it.copy(paperTrading = enabled) }
         }
     }
 
     fun setDonationPercent(percent: Double) {
+        // Apply state immediately so the slider thumb tracks the gesture
+        // smoothly (previously every drag-tick suspended on the prefs save).
+        _state.update { it.copy(donationPercent = percent) }
         viewModelScope.launch {
             settingsRepository.setDonationPercent(percent)
-            _state.update { it.copy(donationPercent = percent) }
         }
     }
 
@@ -130,7 +161,11 @@ class SettingsViewModel @Inject constructor(
     fun activateKillSwitch() {
         viewModelScope.launch {
             riskRepository.activateKillSwitch()
+            settingsRepository.setBotEnabled(false)
             _state.update { it.copy(botEnabled = false) }
+            // Make sure the 24/7 trading service is actually stopped, not
+            // just the in-memory flag.
+            startOrStopTradingService(false)
         }
     }
 

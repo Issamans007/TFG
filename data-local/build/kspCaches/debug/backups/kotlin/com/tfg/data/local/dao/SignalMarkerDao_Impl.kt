@@ -32,7 +32,7 @@ public class SignalMarkerDao_Impl(
     this.__db = __db
     this.__insertAdapterOfSignalMarkerEntity = object : EntityInsertAdapter<SignalMarkerEntity>() {
       protected override fun createQuery(): String =
-          "INSERT OR REPLACE INTO `signal_markers` (`id`,`scriptId`,`symbol`,`interval`,`openTime`,`signalType`,`price`,`timestamp`) VALUES (?,?,?,?,?,?,?,?)"
+          "INSERT OR REPLACE INTO `signal_markers` (`id`,`scriptId`,`symbol`,`interval`,`openTime`,`signalType`,`price`,`label`,`orderType`,`timestamp`) VALUES (?,?,?,?,?,?,?,?,?,?)"
 
       protected override fun bind(statement: SQLiteStatement, entity: SignalMarkerEntity) {
         statement.bindText(1, entity.id)
@@ -42,7 +42,9 @@ public class SignalMarkerDao_Impl(
         statement.bindLong(5, entity.openTime)
         statement.bindText(6, entity.signalType)
         statement.bindDouble(7, entity.price)
-        statement.bindLong(8, entity.timestamp)
+        statement.bindText(8, entity.label)
+        statement.bindText(9, entity.orderType)
+        statement.bindLong(10, entity.timestamp)
       }
     }
   }
@@ -70,6 +72,8 @@ public class SignalMarkerDao_Impl(
         val _columnIndexOfOpenTime: Int = getColumnIndexOrThrow(_stmt, "openTime")
         val _columnIndexOfSignalType: Int = getColumnIndexOrThrow(_stmt, "signalType")
         val _columnIndexOfPrice: Int = getColumnIndexOrThrow(_stmt, "price")
+        val _columnIndexOfLabel: Int = getColumnIndexOrThrow(_stmt, "label")
+        val _columnIndexOfOrderType: Int = getColumnIndexOrThrow(_stmt, "orderType")
         val _columnIndexOfTimestamp: Int = getColumnIndexOrThrow(_stmt, "timestamp")
         val _result: MutableList<SignalMarkerEntity> = mutableListOf()
         while (_stmt.step()) {
@@ -88,10 +92,14 @@ public class SignalMarkerDao_Impl(
           _tmpSignalType = _stmt.getText(_columnIndexOfSignalType)
           val _tmpPrice: Double
           _tmpPrice = _stmt.getDouble(_columnIndexOfPrice)
+          val _tmpLabel: String
+          _tmpLabel = _stmt.getText(_columnIndexOfLabel)
+          val _tmpOrderType: String
+          _tmpOrderType = _stmt.getText(_columnIndexOfOrderType)
           val _tmpTimestamp: Long
           _tmpTimestamp = _stmt.getLong(_columnIndexOfTimestamp)
           _item =
-              SignalMarkerEntity(_tmpId,_tmpScriptId,_tmpSymbol,_tmpInterval,_tmpOpenTime,_tmpSignalType,_tmpPrice,_tmpTimestamp)
+              SignalMarkerEntity(_tmpId,_tmpScriptId,_tmpSymbol,_tmpInterval,_tmpOpenTime,_tmpSignalType,_tmpPrice,_tmpLabel,_tmpOrderType,_tmpTimestamp)
           _result.add(_item)
         }
         _result

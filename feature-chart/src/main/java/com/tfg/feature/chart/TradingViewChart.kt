@@ -32,12 +32,25 @@ fun TradingViewChart(
     ichimokuData: IchimokuFullData?,
     cloudOverlays: List<CloudOverlayData>,
     customIndicatorOutputs: List<IndicatorOutput> = emptyList(),
+    strategyPlotJson: String? = null,
+    dashboardJson: String? = null,
     chartType: String = "candle",
+    symbol: String = "",
     modifier: Modifier = Modifier,
     onDrawing: (String, String) -> Unit = { _, _ -> }
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var isReady by remember { mutableStateOf(false) }
+
+    // Switch active symbol BEFORE pushing new candles so old drawings get
+    // saved per-symbol and cleared cleanly to avoid stale-coordinate artefacts.
+    LaunchedEffect(isReady, symbol) {
+        if (!isReady || symbol.isEmpty()) return@LaunchedEffect
+        webView?.post {
+            val safe = symbol.replace("'", "")
+            webView?.evaluateJavascript("setSymbol('$safe')", null)
+        }
+    }
 
     // Push data when ready or when data changes
     LaunchedEffect(isReady, candles) {
@@ -174,6 +187,30 @@ fun TradingViewChart(
         }
     }
 
+    // Push strategy plot data (overlays/panels plotted via plot() API in JS strategies)
+    LaunchedEffect(isReady, strategyPlotJson) {
+        if (!isReady) return@LaunchedEffect
+        webView?.post {
+            if (strategyPlotJson != null) {
+                val escaped = strategyPlotJson.replace("\\", "\\\\").replace("'", "\\'")
+                webView?.evaluateJavascript("setStrategyPlot('$escaped')", null)
+            }
+        }
+    }
+
+    // Push strategy dashboard overlay (score table on the chart)
+    LaunchedEffect(isReady, dashboardJson) {
+        if (!isReady) return@LaunchedEffect
+        webView?.post {
+            if (dashboardJson != null) {
+                val escaped = dashboardJson.replace("\\", "\\\\").replace("'", "\\'")
+                webView?.evaluateJavascript("setDashboard('$escaped')", null)
+            } else {
+                webView?.evaluateJavascript("hideDashboard()", null)
+            }
+        }
+    }
+
     AndroidView(
         modifier = modifier,
         factory = { context ->
@@ -184,7 +221,14 @@ fun TradingViewChart(
                 )
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
-                settings.allowFileAccess = true
+                // Allow only the bundled chart asset; deny file:// outside assets,
+                // any content:// access, and universal/file-from-file XSS vectors.
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                @Suppress("DEPRECATION")
+                settings.allowFileAccessFromFileURLs = false
+                @Suppress("DEPRECATION")
+                settings.allowUniversalAccessFromFileURLs = false
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
                 // ─── Smooth rendering ────────────────────────
@@ -212,6 +256,17 @@ fun TradingViewChart(
                         isReady = true
                         // Force re-layout so the chart renders at correct size
                         view?.requestLayout()
+                    }
+
+                    // Lock down navigation: only the bundled chart asset is allowed.
+                    // Any other URL (e.g. injected via a malicious indicator URL or
+                    // a future external link) is silently dropped.
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: android.webkit.WebResourceRequest?
+                    ): Boolean {
+                        val target = request?.url?.toString().orEmpty()
+                        return !target.startsWith("file:///android_asset/")
                     }
                 }
                 loadUrl("file:///android_asset/chart.html")
@@ -284,16 +339,21 @@ private fun candlesToJson(candles: List<Candle>): String {
 
 private fun markersToJson(signals: List<SignalMarker>): String {
     val arr = JSONArray()
-    signals.forEach { s ->
-        val obj = JSONObject()
-        obj.put("t", s.openTime / 1000)
-        obj.put("type", when (s.signalType) {
-            SignalType.BUY -> "BUY"
-            SignalType.SELL -> "SELL"
-            SignalType.CLOSE -> "CLOSE"
-        })
-        arr.put(obj)
-    }
+    // Deduplicate markers at the exact same time + signalType so the chart
+    // doesn't render multiple identical arrows on top of each other.
+    val seen = HashSet<String>()
+    signals
+        .sortedBy { it.openTime }
+        .forEach { s ->
+            val key = "${s.openTime}|${s.signalType.name}"
+            if (!seen.add(key)) return@forEach
+            val obj = JSONObject()
+            obj.put("t", s.openTime / 1000)
+            obj.put("type", s.signalType.name)
+            if (s.label.isNotEmpty()) obj.put("label", s.label)
+            if (s.orderType != "MARKET") obj.put("orderType", s.orderType)
+            arr.put(obj)
+        }
     return arr.toString().replace("'", "\\'")
 }
 

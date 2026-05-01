@@ -1,10 +1,12 @@
 package com.tfg.engine;
 
+import com.tfg.domain.service.ConsoleBus;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.Factory;
 import dagger.internal.QualifierMetadata;
 import dagger.internal.ScopeMetadata;
 import javax.annotation.processing.Generated;
+import javax.inject.Provider;
 
 @ScopeMetadata("javax.inject.Singleton")
 @QualifierMetadata
@@ -21,20 +23,22 @@ import javax.annotation.processing.Generated;
     "cast"
 })
 public final class ScriptEngine_Factory implements Factory<ScriptEngine> {
+  private final Provider<ConsoleBus> consoleBusProvider;
+
+  public ScriptEngine_Factory(Provider<ConsoleBus> consoleBusProvider) {
+    this.consoleBusProvider = consoleBusProvider;
+  }
+
   @Override
   public ScriptEngine get() {
-    return newInstance();
+    return newInstance(consoleBusProvider.get());
   }
 
-  public static ScriptEngine_Factory create() {
-    return InstanceHolder.INSTANCE;
+  public static ScriptEngine_Factory create(Provider<ConsoleBus> consoleBusProvider) {
+    return new ScriptEngine_Factory(consoleBusProvider);
   }
 
-  public static ScriptEngine newInstance() {
-    return new ScriptEngine();
-  }
-
-  private static final class InstanceHolder {
-    private static final ScriptEngine_Factory INSTANCE = new ScriptEngine_Factory();
+  public static ScriptEngine newInstance(ConsoleBus consoleBus) {
+    return new ScriptEngine(consoleBus);
   }
 }

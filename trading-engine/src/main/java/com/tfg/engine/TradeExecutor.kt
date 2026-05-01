@@ -5,11 +5,16 @@ import com.tfg.data.local.dao.OrderDao
 import com.tfg.data.local.entity.OfflineQueueEntity
 import com.tfg.data.local.mapper.EntityMapper.toEntity
 import com.tfg.data.remote.api.BinanceApi
+import com.tfg.data.remote.websocket.WebSocketManager
 import com.tfg.domain.model.*
 import com.tfg.domain.repository.TradingRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,6 +25,7 @@ class TradeExecutor @Inject constructor(
     private val orderDao: OrderDao,
     private val riskEngine: RiskEngine,
     private val binanceApi: BinanceApi,
+    private val webSocketManager: WebSocketManager,
     @ApplicationContext private val context: Context
 ) {
     private val prefs = context.getSharedPreferences("trade_executor", Context.MODE_PRIVATE)
@@ -55,11 +61,21 @@ class TradeExecutor @Inject constructor(
         private const val TICKER_CACHE_TTL_MS = 500L // 500ms — tight enough for 1s SL/TP loop
         private const val FILL_POLL_INTERVAL_MS = 500L
         private const val FILL_POLL_MAX_ATTEMPTS = 10 // 5s total max wait
+        private const val FILL_WS_TIMEOUT_MS = 5_000L // wait this long for executionReport before falling back to polling
     }
 
     /** Per-symbol price cache to avoid N+1 API calls in the 1-second monitoring loop */
     private data class CachedTicker(val price: String, val timestamp: Long)
     private val tickerCache = java.util.concurrent.ConcurrentHashMap<String, CachedTicker>()
+
+    /**
+     * Per-order Mutex serializing TP/SL/trailing checks so concurrent monitor ticks
+     * cannot read-modify-write the same in-memory level set and SharedPreferences
+     * snapshot at the same time. Different orders still execute in parallel.
+     */
+    private val perOrderMutex = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+    private fun mutexFor(orderId: String): Mutex =
+        perOrderMutex.computeIfAbsent(orderId) { Mutex() }
 
     private suspend fun getCachedTickerPrice(symbol: String): String? {
         val cached = tickerCache[symbol]
@@ -74,21 +90,31 @@ class TradeExecutor @Inject constructor(
     }
 
     private fun persistPeakPrices() {
+        // Intentionally async (apply() vs commit()): peaks are written on every
+        // ticker tick for trailing stops and a synchronous fsync on each call
+        // would dominate the I/O budget. The loss is bounded \u2014 a process kill
+        // between tick and write only loses the most recent peak. The next tick
+        // re-derives a peak from price >= prevPeak, so accuracy self-heals
+        // within one bar. Level-sets (TP/SL/breakeven) below use commit() because
+        // missing one of those records would re-fire a level and double-trade.
         prefs.edit().putStringSet(KEY_PEAK_PRICES,
             peakPrices.entries.map { "${it.key}=${it.value}" }.toSet()
         ).apply()
     }
 
+    // The level-set persists below use commit() so a process kill immediately
+    // after a TP/SL fires never loses the "already-fired" record (which would
+    // otherwise allow the same level to fire twice on restart).
     private fun persistTpLevels() {
-        prefs.edit().putStringSet(KEY_TP_LEVELS, synchronized(executedTpLevels) { executedTpLevels.toSet() }).apply()
+        prefs.edit().putStringSet(KEY_TP_LEVELS, synchronized(executedTpLevels) { executedTpLevels.toSet() }).commit()
     }
 
     private fun persistSlLevels() {
-        prefs.edit().putStringSet(KEY_SL_LEVELS, synchronized(executedSlLevels) { executedSlLevels.toSet() }).apply()
+        prefs.edit().putStringSet(KEY_SL_LEVELS, synchronized(executedSlLevels) { executedSlLevels.toSet() }).commit()
     }
 
     private fun persistBreakeven() {
-        prefs.edit().putStringSet(KEY_BREAKEVEN, synchronized(breakevenActive) { breakevenActive.toSet() }).apply()
+        prefs.edit().putStringSet(KEY_BREAKEVEN, synchronized(breakevenActive) { breakevenActive.toSet() }).commit()
     }
 
     suspend fun executeOrder(order: Order): Result<Order> {
@@ -110,8 +136,24 @@ class TradeExecutor @Inject constructor(
                 TradeSounds.orderFilled(context)
                 Timber.i("Order placed${if (order.isPaperTrade) " (paper)" else ""}: ${placed.id} ${placed.symbol} ${placed.side}")
 
-                // Confirm fill and record risk with actual fill data
+                // Confirm fill and record risk with actual fill data.
+                // The DB row inserted by tradingRepository.placeOrder reflects
+                // only the optimistic placement state \u2014 if the fill arrives
+                // via WS executionReport (with updated qty/price/status), we
+                // must persist that back so a process kill before the next
+                // status update doesn't leave the row stuck on PENDING.
+                // Wrapping a Room transaction across confirmFill is wrong
+                // because confirmFill awaits the network; the durability gap
+                // between exchange ack and DB write is instead covered by
+                // reconcileWithBinance() at startup (see TradingForegroundService).
                 val confirmed = confirmFill(placed)
+                if (!confirmed.isPaperTrade && (
+                        confirmed.status != placed.status ||
+                        confirmed.filledQuantity != placed.filledQuantity ||
+                        confirmed.filledPrice != placed.filledPrice)) {
+                    runCatching { orderDao.update(confirmed.toEntity()) }
+                        .onFailure { Timber.e(it, "Failed to persist confirmed fill for ${confirmed.id}") }
+                }
                 riskEngine.recordTradeResult(confirmed)
 
                 val expectedPrice = order.price
@@ -119,6 +161,16 @@ class TradeExecutor @Inject constructor(
                     val slippage = (confirmed.filledPrice - expectedPrice) / expectedPrice * 100.0
                     Timber.i("Fill confirmed: ${confirmed.symbol} fillPrice=%.4f expected=%.4f slippage=%.4f%%"
                         .format(confirmed.filledPrice, expectedPrice, slippage))
+                }
+
+                // Place exchange-side SL/TP protection so the position is safe
+                // even if the app is killed / device is in Doze mode. The
+                // client-side checkTakeProfits / checkStopLosses loops still
+                // run as a belt-and-braces safety net for partial TPs and
+                // any condition the exchange-side bracket can't express
+                // (trailing stops, time-based, conditional).
+                if (!order.isPaperTrade && confirmed.status == OrderStatus.FILLED) {
+                    placeExchangeSideProtection(order, confirmed)
                 }
             }
             result
@@ -129,8 +181,69 @@ class TradeExecutor @Inject constructor(
     }
 
     /**
-     * Poll Binance for actual fill status. For paper trades or already-filled orders,
-     * returns immediately. For live orders, polls up to [FILL_POLL_MAX_ATTEMPTS] times.
+     * After an entry fills, place an exchange-side bracket so the position is
+     * protected even if the app is killed.
+     *  - Spot:    OCO (TP limit + SL stop-limit) on the OPPOSITE side, qty = filled qty.
+     *  - Futures: STOP_MARKET + TAKE_PROFIT_MARKET reduceOnly, both as separate orders.
+     *
+     * Failures here are logged but do NOT bubble up — the entry already filled,
+     * and the client-side monitoring loop is still active as a fallback.
+     */
+    private suspend fun placeExchangeSideProtection(original: Order, filled: Order) {
+        // Need exactly one TP and one SL to express as a single OCO/bracket.
+        // Multi-level TPs stay on client-side monitoring (Binance OCO is single-leg).
+        val singleTp = original.takeProfits.singleOrNull() ?: return
+        val singleSl = original.stopLosses.singleOrNull() ?: return
+        val qty = filled.filledQuantity.takeIf { it > 0 } ?: return
+        val closeSide = if (original.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
+
+        try {
+            when (original.marketType) {
+                MarketType.SPOT -> {
+                    // OCO stopLimitPrice slightly worse than stopPrice so the
+                    // limit fills if the stop triggers in a fast market.
+                    val slBuffer = if (closeSide == OrderSide.SELL) 0.995 else 1.005
+                    val res = tradingRepository.placeOcoOrder(
+                        symbol = original.symbol,
+                        side = closeSide,
+                        quantity = qty,
+                        price = singleTp.price,
+                        stopPrice = singleSl.price,
+                        stopLimitPrice = singleSl.price * slBuffer
+                    )
+                    res.onSuccess {
+                        Timber.i("Exchange-side OCO placed for ${original.symbol}: TP=${singleTp.price} SL=${singleSl.price}")
+                    }.onFailure {
+                        Timber.w(it, "Failed to place exchange-side OCO for ${original.symbol} — falling back to client-side monitoring")
+                    }
+                }
+                MarketType.FUTURES_USDM -> {
+                    val res = tradingRepository.placeBracketOrder(
+                        symbol = original.symbol,
+                        side = closeSide,
+                        quantity = qty,
+                        entryPrice = filled.filledPrice,
+                        takeProfitPrice = singleTp.price,
+                        stopLossPrice = singleSl.price
+                    )
+                    res.onSuccess {
+                        Timber.i("Exchange-side bracket placed for ${original.symbol}: TP=${singleTp.price} SL=${singleSl.price}")
+                    }.onFailure {
+                        Timber.w(it, "Failed to place exchange-side bracket for ${original.symbol} — falling back to client-side monitoring")
+                    }
+                }
+                else -> { /* paper / unsupported */ }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "placeExchangeSideProtection threw for ${original.symbol}")
+        }
+    }
+
+    /**
+     * Confirm fill via Binance user-data stream first (push-based, real-time)
+     * and only fall back to REST polling if the WS event doesn't arrive within
+     * [FILL_WS_TIMEOUT_MS]. For paper trades or already-filled orders, returns
+     * immediately.
      */
     private suspend fun confirmFill(placed: Order): Order {
         // Paper trades are instantly filled
@@ -138,13 +251,41 @@ class TradeExecutor @Inject constructor(
         // Already filled at placement time (common for market orders)
         if (placed.status == OrderStatus.FILLED) return placed
 
+        // 1) Wait for the executionReport / ORDER_TRADE_UPDATE matching this
+        //    clientOrderId. This avoids burning REST quota on every fill and
+        //    is the recommended Binance pattern.
+        val event = withTimeoutOrNull(FILL_WS_TIMEOUT_MS) {
+            webSocketManager.userDataFlow
+                .filter { it.clientOrderId == placed.id || it.orderId?.toString() == placed.id }
+                .filter { it.orderStatus == "FILLED" || it.orderStatus == "CANCELED" || it.orderStatus == "EXPIRED" }
+                .first()
+        }
+        if (event != null) {
+            val filledQty = event.filledQty?.toDoubleOrNull() ?: placed.filledQuantity
+            val filledQuote = event.filledQuoteQty?.toDoubleOrNull() ?: 0.0
+            val avgPrice = if (filledQty > 0 && filledQuote > 0) filledQuote / filledQty else placed.filledPrice
+            val newStatus = when (event.orderStatus) {
+                "FILLED" -> OrderStatus.FILLED
+                "CANCELED", "EXPIRED" -> OrderStatus.CANCELLED
+                else -> placed.status
+            }
+            Timber.i("Fill confirmed via WS: ${placed.symbol} status=$newStatus fillQty=$filledQty fillPrice=$avgPrice")
+            return placed.copy(
+                status = newStatus,
+                filledQuantity = filledQty,
+                filledPrice = avgPrice
+            )
+        }
+
+        // 2) WS event didn't arrive in time — fall back to REST polling.
+        Timber.w("No WS fill event within ${FILL_WS_TIMEOUT_MS}ms for ${placed.id} — falling back to REST polling")
         for (attempt in 1..FILL_POLL_MAX_ATTEMPTS) {
             delay(FILL_POLL_INTERVAL_MS)
             try {
                 val queried = tradingRepository.queryOrder(placed.symbol, placed.id).getOrNull()
                     ?: continue
                 if (queried.status == OrderStatus.FILLED || queried.status == OrderStatus.CANCELLED) {
-                    Timber.i("Fill confirmed after ${attempt} polls: ${queried.symbol} status=${queried.status} fillQty=${queried.filledQuantity} fillPrice=${queried.filledPrice}")
+                    Timber.i("Fill confirmed via REST after ${attempt} polls: ${queried.symbol} status=${queried.status} fillQty=${queried.filledQuantity} fillPrice=${queried.filledPrice}")
                     return queried
                 }
             } catch (e: Exception) {
@@ -155,10 +296,16 @@ class TradeExecutor @Inject constructor(
         return placed
     }
 
-    suspend fun checkTakeProfits(order: Order) {
-        if (order.takeProfits.isEmpty()) return
-        val priceStr = getCachedTickerPrice(order.symbol) ?: return
-        val currentPrice = priceStr.toBigDecimal()
+    suspend fun checkTakeProfits(order: Order) = mutexFor(order.id).withLock {
+        if (order.takeProfits.isEmpty()) return@withLock
+        val priceStr = getCachedTickerPrice(order.symbol) ?: return@withLock
+        // Fail-closed: an unparseable ticker (rate-limit JSON body, error
+        // response, locale comma) must NOT throw and skip the rest of the
+        // monitoring tick — just abandon this tick for this order.
+        val currentPrice = priceStr.toBigDecimalOrNull() ?: run {
+            Timber.w("checkTakeProfits: unparseable price '$priceStr' for ${order.symbol}")
+            return@withLock
+        }
         var allTpsExecuted = true
 
         for (tp in order.takeProfits) {
@@ -166,6 +313,7 @@ class TradeExecutor @Inject constructor(
             if (tpKey in executedTpLevels) continue // Already fired this TP level
 
             allTpsExecuted = false
+            // tp.price is a Double, so BigDecimal conversion can never fail.
             val tpPrice = tp.price.toBigDecimal()
             val shouldTrigger = when (order.side) {
                 OrderSide.BUY -> currentPrice.compareTo(tpPrice) >= 0
@@ -180,7 +328,8 @@ class TradeExecutor @Inject constructor(
                     tradingRepository.placeOrder(
                         order.copy(
                             id = "", side = closeSide, quantity = closeQty,
-                            type = OrderType.MARKET, takeProfits = emptyList(), stopLosses = emptyList()
+                            type = OrderType.MARKET, takeProfits = emptyList(), stopLosses = emptyList(),
+                            reduceOnly = order.marketType == MarketType.FUTURES_USDM
                         )
                     )
                     TradeHaptics.takeProfitHit(context)
@@ -215,10 +364,13 @@ class TradeExecutor @Inject constructor(
         }
     }
 
-    suspend fun checkStopLosses(order: Order) {
-        if (order.stopLosses.isEmpty()) return
-        val priceStr = getCachedTickerPrice(order.symbol) ?: return
-        val currentPrice = priceStr.toBigDecimal()
+    suspend fun checkStopLosses(order: Order) = mutexFor(order.id).withLock {
+        if (order.stopLosses.isEmpty()) return@withLock
+        val priceStr = getCachedTickerPrice(order.symbol) ?: return@withLock
+        val currentPrice = priceStr.toBigDecimalOrNull() ?: run {
+            Timber.w("checkStopLosses: unparseable price '$priceStr' for ${order.symbol}")
+            return@withLock
+        }
         var allSlsExecuted = true
 
         for (sl in order.stopLosses) {
@@ -235,6 +387,7 @@ class TradeExecutor @Inject constructor(
                     OrderSide.SELL -> minOf(rawSlPrice, entry)   // short: lower SL to at most entry
                 }
             } else rawSlPrice
+            // effectiveSlPrice is a Double, so BigDecimal conversion can never fail.
             val slPrice = effectiveSlPrice.toBigDecimal()
             val shouldTrigger = when (order.side) {
                 OrderSide.BUY -> currentPrice.compareTo(slPrice) <= 0
@@ -250,7 +403,8 @@ class TradeExecutor @Inject constructor(
                         order.copy(
                             id = "", side = closeSide, quantity = closeQty,
                             type = OrderType.MARKET,
-                            takeProfits = emptyList(), stopLosses = emptyList()
+                            takeProfits = emptyList(), stopLosses = emptyList(),
+                            reduceOnly = order.marketType == MarketType.FUTURES_USDM
                         )
                     )
                     TradeHaptics.stopLossHit(context)
@@ -279,11 +433,14 @@ class TradeExecutor @Inject constructor(
         }
     }
 
-    suspend fun checkTrailingStop(order: Order) {
-        val trailingPercent = order.trailingStopPercent ?: return
-        if (trailingPercent <= 0.0) return
-        val priceStr = getCachedTickerPrice(order.symbol) ?: return
-        val currentPrice = priceStr.toDouble()
+    suspend fun checkTrailingStop(order: Order) = mutexFor(order.id).withLock {
+        val trailingPercent = order.trailingStopPercent ?: return@withLock
+        if (trailingPercent <= 0.0) return@withLock
+        val priceStr = getCachedTickerPrice(order.symbol) ?: return@withLock
+        val currentPrice = priceStr.toDoubleOrNull() ?: run {
+            Timber.w("checkTrailingStop: unparseable price '$priceStr' for ${order.symbol}")
+            return@withLock
+        }
 
         // Update high-water mark (peak price since entry)
         val peak = peakPrices.compute(order.id) { _, prev ->
@@ -315,7 +472,8 @@ class TradeExecutor @Inject constructor(
                 tradingRepository.placeOrder(
                     order.copy(
                         id = "", side = closeSide, type = OrderType.MARKET,
-                        takeProfits = emptyList(), stopLosses = emptyList(), trailingStopPercent = null
+                        takeProfits = emptyList(), stopLosses = emptyList(), trailingStopPercent = null,
+                        reduceOnly = order.marketType == MarketType.FUTURES_USDM
                     )
                 )
                 orderDao.updateStatus(order.id, OrderStatus.FILLED.name)
@@ -373,7 +531,10 @@ class TradeExecutor @Inject constructor(
         if (order.type != OrderType.CONDITIONAL) return
         val trigger = order.conditionalTrigger ?: return
         val priceStr = getCachedTickerPrice(trigger.triggerSymbol) ?: return
-        val currentPrice = priceStr.toDouble()
+        val currentPrice = priceStr.toDoubleOrNull() ?: run {
+            Timber.w("checkConditionalOrder: unparseable price '$priceStr' for ${trigger.triggerSymbol}")
+            return
+        }
         val prevPrice = prevPrices[trigger.triggerSymbol]
         prevPrices[trigger.triggerSymbol] = currentPrice
 

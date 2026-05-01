@@ -2,6 +2,7 @@ package com.tfg.feature.chart;
 
 import androidx.lifecycle.SavedStateHandle;
 import com.tfg.domain.model.IndicatorExecutor;
+import com.tfg.domain.model.ScriptExecutor;
 import com.tfg.domain.repository.IndicatorRepository;
 import com.tfg.domain.repository.MarketRepository;
 import com.tfg.domain.repository.ScriptRepository;
@@ -37,21 +38,25 @@ public final class CoinDetailViewModel_Factory implements Factory<CoinDetailView
 
   private final Provider<IndicatorExecutor> indicatorExecutorProvider;
 
+  private final Provider<ScriptExecutor> scriptExecutorProvider;
+
   public CoinDetailViewModel_Factory(Provider<SavedStateHandle> savedStateHandleProvider,
       Provider<MarketRepository> marketRepositoryProvider,
       Provider<ScriptRepository> scriptRepositoryProvider,
       Provider<IndicatorRepository> indicatorRepositoryProvider,
-      Provider<IndicatorExecutor> indicatorExecutorProvider) {
+      Provider<IndicatorExecutor> indicatorExecutorProvider,
+      Provider<ScriptExecutor> scriptExecutorProvider) {
     this.savedStateHandleProvider = savedStateHandleProvider;
     this.marketRepositoryProvider = marketRepositoryProvider;
     this.scriptRepositoryProvider = scriptRepositoryProvider;
     this.indicatorRepositoryProvider = indicatorRepositoryProvider;
     this.indicatorExecutorProvider = indicatorExecutorProvider;
+    this.scriptExecutorProvider = scriptExecutorProvider;
   }
 
   @Override
   public CoinDetailViewModel get() {
-    return newInstance(savedStateHandleProvider.get(), marketRepositoryProvider.get(), scriptRepositoryProvider.get(), indicatorRepositoryProvider.get(), indicatorExecutorProvider.get());
+    return newInstance(savedStateHandleProvider.get(), marketRepositoryProvider.get(), scriptRepositoryProvider.get(), indicatorRepositoryProvider.get(), indicatorExecutorProvider.get(), scriptExecutorProvider.get());
   }
 
   public static CoinDetailViewModel_Factory create(
@@ -59,13 +64,15 @@ public final class CoinDetailViewModel_Factory implements Factory<CoinDetailView
       Provider<MarketRepository> marketRepositoryProvider,
       Provider<ScriptRepository> scriptRepositoryProvider,
       Provider<IndicatorRepository> indicatorRepositoryProvider,
-      Provider<IndicatorExecutor> indicatorExecutorProvider) {
-    return new CoinDetailViewModel_Factory(savedStateHandleProvider, marketRepositoryProvider, scriptRepositoryProvider, indicatorRepositoryProvider, indicatorExecutorProvider);
+      Provider<IndicatorExecutor> indicatorExecutorProvider,
+      Provider<ScriptExecutor> scriptExecutorProvider) {
+    return new CoinDetailViewModel_Factory(savedStateHandleProvider, marketRepositoryProvider, scriptRepositoryProvider, indicatorRepositoryProvider, indicatorExecutorProvider, scriptExecutorProvider);
   }
 
   public static CoinDetailViewModel newInstance(SavedStateHandle savedStateHandle,
       MarketRepository marketRepository, ScriptRepository scriptRepository,
-      IndicatorRepository indicatorRepository, IndicatorExecutor indicatorExecutor) {
-    return new CoinDetailViewModel(savedStateHandle, marketRepository, scriptRepository, indicatorRepository, indicatorExecutor);
+      IndicatorRepository indicatorRepository, IndicatorExecutor indicatorExecutor,
+      ScriptExecutor scriptExecutor) {
+    return new CoinDetailViewModel(savedStateHandle, marketRepository, scriptRepository, indicatorRepository, indicatorExecutor, scriptExecutor);
   }
 }

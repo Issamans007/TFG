@@ -8,6 +8,10 @@ data class ExchangeInfoDto(
     val symbols: List<SymbolInfoDto>
 )
 
+data class ServerTimeDto(
+    val serverTime: Long
+)
+
 data class SymbolInfoDto(
     val symbol: String,
     val baseAsset: String,
@@ -112,6 +116,78 @@ data class OcoOrderResponseDto(
     val orders: List<OrderResponseDto>
 )
 
+// === Binance Futures (USDⓈ-M) DTOs ===
+
+data class FuturesAccountDto(
+    val totalWalletBalance: String = "0",
+    val totalUnrealizedProfit: String = "0",
+    val totalMarginBalance: String = "0",
+    val totalInitialMargin: String = "0",
+    val totalMaintMargin: String = "0",
+    val totalCrossWalletBalance: String = "0",
+    val availableBalance: String = "0",
+    val maxWithdrawAmount: String = "0",
+    val canTrade: Boolean = false,
+    val multiAssetsMargin: Boolean = false,
+    val positions: List<FuturesPositionDto> = emptyList()
+)
+
+data class FuturesPositionDto(
+    val symbol: String,
+    val positionAmt: String = "0",
+    val entryPrice: String = "0",
+    val markPrice: String = "0",
+    val unRealizedProfit: String = "0",
+    val liquidationPrice: String = "0",
+    val leverage: String = "1",
+    val maxNotionalValue: String? = null,
+    val marginType: String = "isolated",
+    val isolatedMargin: String = "0",
+    val isAutoAddMargin: String = "false",
+    val positionSide: String = "BOTH",
+    val notional: String = "0",
+    val isolatedWallet: String = "0",
+    val updateTime: Long = 0
+)
+
+data class FuturesOrderResponseDto(
+    val symbol: String,
+    val orderId: Long,
+    val clientOrderId: String = "",
+    val price: String = "0",
+    val origQty: String = "0",
+    val executedQty: String = "0",
+    val cumQuote: String = "0",
+    val avgPrice: String = "0",
+    val status: String = "NEW",
+    val type: String = "MARKET",
+    val side: String = "BUY",
+    val positionSide: String = "BOTH",
+    val stopPrice: String? = null,
+    val workingType: String = "CONTRACT_PRICE",
+    val reduceOnly: Boolean = false,
+    val closePosition: Boolean = false,
+    val time: Long = 0,
+    val updateTime: Long = 0
+)
+
+data class FundingRateDto(
+    val symbol: String,
+    val fundingRate: String,
+    val fundingTime: Long
+)
+
+data class LeverageChangeResponseDto(
+    val leverage: Int,
+    val maxNotionalValue: String? = null,
+    val symbol: String
+)
+
+data class MarginTypeChangeResponseDto(
+    val code: Int = 200,
+    val msg: String = "success"
+)
+
 // === TFG Server DTOs ===
 
 data class LoginRequestDto(val email: String, val password: String)
@@ -172,6 +248,7 @@ data class UserDataWsDto(
     @SerializedName("s") val symbol: String? = null,
     @SerializedName("S") val side: String? = null,
     @SerializedName("o") val orderType: String? = null,
+    @SerializedName("c") val clientOrderId: String? = null,
     @SerializedName("q") val quantity: String? = null,
     @SerializedName("p") val price: String? = null,
     @SerializedName("X") val orderStatus: String? = null,
@@ -181,4 +258,14 @@ data class UserDataWsDto(
     @SerializedName("n") val commission: String? = null,
     @SerializedName("N") val commissionAsset: String? = null,
     @SerializedName("T") val transactionTime: Long? = null
+)
+
+/** Response from POST /api/v3/userDataStream and POST /fapi/v1/listenKey. */
+data class ListenKeyDto(
+    @SerializedName("listenKey") val listenKey: String
+)
+
+/** Response from GET /fapi/v1/positionSide/dual. dualSidePosition=true → hedge mode. */
+data class PositionSideDualDto(
+    @SerializedName("dualSidePosition") val dualSidePosition: Boolean
 )

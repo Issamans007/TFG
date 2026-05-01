@@ -1,6 +1,8 @@
 package com.tfg.engine
 
 import com.tfg.domain.model.*
+import com.tfg.domain.service.ConsoleBus
+import com.tfg.domain.service.ConsoleSource
 import app.cash.quickjs.QuickJs
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -22,8 +24,13 @@ import javax.inject.Singleton
  * A watchdog thread enforces execution timeouts to guard against
  * infinite loops in user code.
  */
+/** Thrown when no QuickJS worker is available within the acquisition timeout. */
+class ScriptEngineBusyException(message: String) : RuntimeException(message)
+
 @Singleton
-class ScriptEngine @Inject constructor() : ScriptExecutor {
+class ScriptEngine @Inject constructor(
+    private val consoleBus: ConsoleBus
+) : ScriptExecutor {
 
     private val gson = Gson()
 
@@ -43,8 +50,41 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
         repeat(poolSize) { q.put(Worker()) }
     }
 
+    /** Maximum time to wait for a free worker before failing fast. */
+    private val workerAcquireTimeoutMs = 2_000L
+
+    /**
+     * Maximum heap utilisation ratio (used / max) above which a script
+     * evaluation will be refused. The QuickJS-Android JNI binding does not
+     * expose `setMemoryLimit`, so this is a coarse JVM-side safeguard:
+     * if the process is already near OOM, do not give a runaway script the
+     * opportunity to push it over the edge.
+     */
+    private val maxHeapUtilisation = 0.85
+
+    private fun memoryPressureGuard() {
+        val rt = Runtime.getRuntime()
+        val used = rt.totalMemory() - rt.freeMemory()
+        val ratio = used.toDouble() / rt.maxMemory().toDouble()
+        if (ratio > maxHeapUtilisation) {
+            // Try to recover before refusing.
+            System.gc()
+            val used2 = rt.totalMemory() - rt.freeMemory()
+            val ratio2 = used2.toDouble() / rt.maxMemory().toDouble()
+            if (ratio2 > maxHeapUtilisation) {
+                throw OutOfMemoryError(
+                    "Heap utilisation %.0f%% exceeds %.0f%% \u2014 refusing script evaluation"
+                        .format(ratio2 * 100, maxHeapUtilisation * 100)
+                )
+            }
+        }
+    }
+
     private fun <T> withWorker(block: (Worker) -> T): T {
-        val worker = workerPool.take()
+        val worker = workerPool.poll(workerAcquireTimeoutMs, TimeUnit.MILLISECONDS)
+            ?: throw ScriptEngineBusyException(
+                "All $poolSize QuickJS workers busy after ${workerAcquireTimeoutMs}ms"
+            )
         return try {
             block(worker)
         } finally {
@@ -58,6 +98,21 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
 
     /** Logs captured from the most recent strategy() call (last-writer-wins). */
     @Volatile private var _lastLogs: List<String> = emptyList()
+
+    /** Dashboard JSON captured from _state.dashboard after the last evaluate(). */
+    @Volatile private var _lastDashboard: String? = null
+
+    /** Plot-data JSON captured from _state.plot after the last evaluate(). */
+    @Volatile private var _lastPlotData: String? = null
+
+    /** Diagnostic JSON captured from _state.diag after the last evaluate(). */
+    @Volatile private var _lastDiag: String? = null
+
+    /** Counts evaluate()/executeMulti() calls that fell back to HOLD due to a
+     *  thrown exception (including watchdog timeouts). Surfaced by the
+     *  backtest engine so a 0-trade run isn't silently caused by per-bar
+     *  timeouts. */
+    private val _errorCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     override fun evaluate(code: String, candles: List<Candle>, params: Map<String, String>): StrategySignal =
         execute(code, candles, params)
@@ -73,16 +128,40 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
 
     override fun getLastLogs(): List<String> = _lastLogs
 
+    override fun getLastDashboard(): String? = _lastDashboard
+
+    override fun getLastPlotData(): String? = _lastPlotData
+
+    override fun getLastDiag(): String? = _lastDiag
+
+    override fun getAndResetErrorCount(): Int = _errorCount.getAndSet(0)
+
     override fun resetState() {
-        // Drain all workers, reset their JS state, then return them
-        val workers = mutableListOf<Worker>()
-        repeat(poolSize) { workerPool.poll()?.let { workers.add(it) } }
-        for (w in workers) {
-            w.js?.let {
-                try { it.evaluate("_state = {};", "resetState") } catch (_: Exception) {}
-            }
+        // Drain ALL workers, fully close their QuickJS contexts so the next
+        // call rebuilds them from scratch (zero-state guarantee). This
+        // prevents stale `_state`, cached indicator results, or half-finished
+        // executions from one backtest leaking into the next.
+        // Use poll-with-timeout to avoid blocking forever if a worker is
+        // currently in use by a parallel evaluate (e.g. refreshPlotData).
+        val drained = mutableListOf<Worker>()
+        repeat(poolSize) {
+            val w = workerPool.poll(50, TimeUnit.MILLISECONDS)
+            if (w != null) drained.add(w)
         }
-        workers.forEach { workerPool.put(it) }
+        for (w in drained) {
+            try { w.js?.close() } catch (_: Exception) {}
+            w.js = null
+            w.loadedCode = null
+            w.loadedParams = null
+            w.lastLogs = emptyList()
+        }
+        // Clear engine-wide cached outputs from the previous run.
+        _lastLogs = emptyList()
+        _lastDashboard = null
+        _lastPlotData = null
+        _lastDiag = null
+        lastEmittedJsErrorKey = null
+        drained.forEach { workerPool.put(it) }
     }
 
     override fun validateSyntax(code: String): String? {
@@ -101,6 +180,80 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
     }
 
     /**
+     * One-shot runtime check: build a fresh QuickJS context, run strategy()
+     * once on the supplied candles, and report whether it threw — *with* the
+     * full exception message, console logs, and elapsed ms. Unlike [execute]
+     * this never silently returns HOLD on error: the caller gets the truth.
+     *
+     * Caps the candle slice to 500 bars to match the backtest sliding window
+     * so the timing measured here reflects what the loop actually pays per bar.
+     */
+    override fun runtimeCheck(
+        code: String,
+        candles: List<Candle>,
+        params: Map<String, String>
+    ): RuntimeCheckResult {
+        val startNs = System.nanoTime()
+        val capped = if (candles.size > 500) candles.subList(candles.size - 500, candles.size) else candles
+        val tempJs = QuickJs.create()
+        // Hard time cap so a runaway strategy doesn't hang the UI thread.
+        val timeoutFuture = watchdog.schedule({
+            try { tempJs.close() } catch (_: Exception) {}
+        }, TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        return try {
+            tempJs.evaluate(JS_INDICATOR_LIBRARY, "indicators")
+            // Param decls (same as production path)
+            val paramDecls = buildSafeParamDecls(params)
+            if (paramDecls.isNotBlank()) tempJs.evaluate(paramDecls, "paramDecls")
+            tempJs.evaluate(code, "strategy")
+            tempJs.evaluate("var _state = {};", "state")
+            tempJs.evaluate("""
+                var _log = [];
+                var console = {
+                    log: function() { var p=[]; for(var i=0;i<arguments.length;i++) p.push(String(arguments[i])); _log.push(p.join(' ')); },
+                    warn: function() { var p=['[WARN]']; for(var i=0;i<arguments.length;i++) p.push(String(arguments[i])); _log.push(p.join(' ')); },
+                    error: function() { var p=['[ERROR]']; for(var i=0;i<arguments.length;i++) p.push(String(arguments[i])); _log.push(p.join(' ')); },
+                    info: function() { var p=['[INFO]']; for(var i=0;i<arguments.length;i++) p.push(String(arguments[i])); _log.push(p.join(' ')); }
+                };
+            """.trimIndent(), "console")
+            tempJs.evaluate("var _account = null;", "account")
+            tempJs.evaluate("var _htf = {};", "htf")
+            tempJs.evaluate("var _candles = ${buildCandlesJson(capped)};", "data")
+            tempJs.evaluate("var _params = ${buildParamsJson(params)};", "params")
+            val result = tempJs.evaluate("JSON.stringify(strategy(_candles));", "call")
+            val logs = captureLogs(tempJs)
+            val sig = parseSignal(result?.toString() ?: "")
+            val sigType = when (sig) {
+                is StrategySignal.BUY -> "BUY"
+                is StrategySignal.SELL -> "SELL"
+                StrategySignal.CLOSE_IF_LONG -> "CLOSE_IF_LONG"
+                StrategySignal.CLOSE_IF_SHORT -> "CLOSE_IF_SHORT"
+                StrategySignal.HOLD -> "HOLD"
+            }
+            RuntimeCheckResult(
+                ok = true,
+                signalType = sigType,
+                errorMessage = null,
+                logs = logs,
+                elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+            )
+        } catch (e: Exception) {
+            // Try to grab whatever logs were captured before the throw.
+            val logs = try { captureLogs(tempJs) } catch (_: Exception) { emptyList() }
+            RuntimeCheckResult(
+                ok = false,
+                signalType = "HOLD",
+                errorMessage = "${e::class.simpleName}: ${e.message ?: "unknown"}",
+                logs = logs,
+                elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+            )
+        } finally {
+            timeoutFuture.cancel(false)
+            try { tempJs.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
      * Execute user code against the provided candles and params.
      * Returns the StrategySignal produced by the user's strategy() function.
      * Falls back to HOLD on any execution error (including timeout).
@@ -113,6 +266,7 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
         account: ScriptAccount? = null,
         htfCandles: Map<String, List<Candle>> = emptyMap()
     ): StrategySignal = withWorker { worker ->
+        memoryPressureGuard()
         val js = getOrCreateJs(worker, code, params)
         val timeoutFuture = watchdog.schedule({ closeJs(worker) }, TIMEOUT_MS, TimeUnit.MILLISECONDS)
         try {
@@ -145,9 +299,41 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
             worker.lastLogs = captureLogs(js)
             _lastLogs = worker.lastLogs
 
+            // 6. Capture dashboard from _state.dashboard (if set by TFG ALGO etc.)
+            _lastDashboard = try {
+                val d = js.evaluate("typeof _state !== 'undefined' && _state.dashboard ? JSON.stringify(_state.dashboard) : null;", "dash")
+                d?.toString()?.takeIf { it != "null" && it.isNotBlank() }
+            } catch (_: Exception) { null }
+
+            // 7. Capture strategy plot data from _state.plot (overlays, panels, hlines, etc.)
+            _lastPlotData = try {
+                val p = js.evaluate("typeof _state !== 'undefined' && _state.plot ? JSON.stringify(_state.plot) : null;", "plot")
+                p?.toString()?.takeIf { it != "null" && it.isNotBlank() }
+            } catch (_: Exception) { null }
+
+            // 8. Capture diagnostic counters from _state.diag (e.g. tier breakdown for ISSA ALGO)
+            _lastDiag = try {
+                val d = js.evaluate("typeof _state !== 'undefined' && _state.diag ? JSON.stringify(_state.diag) : null;", "diag")
+                d?.toString()?.takeIf { it != "null" && it.isNotBlank() }
+            } catch (_: Exception) { null }
+
             parseSignal(resultStr?.toString() ?: "")
         } catch (e: Exception) {
+            _errorCount.incrementAndGet()
             Timber.w(e, "ScriptEngine execution failed, falling back to HOLD")
+            // Dedupe: a strategy that throws on every bar would otherwise
+            // spam the console with hundreds of identical entries during a
+            // single backtest run. Only surface a given (class, message)
+            // pair once per execute() session.
+            val key = (e::class.simpleName ?: "JsError") + "|" + (e.message ?: "")
+            if (lastEmittedJsErrorKey != key) {
+                lastEmittedJsErrorKey = key
+                consoleBus.error(
+                    ConsoleSource.STRATEGY,
+                    title = "Strategy threw",
+                    message = e.message ?: e::class.simpleName ?: "unknown JS error"
+                )
+            }
             closeJs(worker)
             StrategySignal.HOLD
         } finally {
@@ -155,12 +341,15 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
         }
     }
 
+    @Volatile private var lastEmittedJsErrorKey: String? = null
+
     fun executeMulti(
         code: String,
         candles: List<Candle>,
         params: Map<String, String>,
         account: ScriptAccount? = null
     ): List<TargetedSignal> = withWorker { worker ->
+        memoryPressureGuard()
         val js = getOrCreateJs(worker, code, params)
         val timeoutFuture = watchdog.schedule({ closeJs(worker) }, TIMEOUT_MS, TimeUnit.MILLISECONDS)
         try {
@@ -173,6 +362,7 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
             _lastLogs = worker.lastLogs
             parseSignalOrList(resultStr?.toString() ?: "")
         } catch (e: Exception) {
+            _errorCount.incrementAndGet()
             Timber.w(e, "ScriptEngine multi-execution failed")
             closeJs(worker)
             listOf(TargetedSignal(null, StrategySignal.HOLD))
@@ -193,10 +383,7 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
         // Load indicator library once
         js.evaluate(JS_INDICATOR_LIBRARY, "indicators")
         // Inject param values as constants
-        val paramDecls = params.entries.joinToString("\n") { (k, v) ->
-            val numVal = v.toDoubleOrNull()
-            if (numVal != null) "var $k = $numVal;" else "var $k = \"${v.replace("\"", "\\\"")}\";"
-        }
+        val paramDecls = buildSafeParamDecls(params)
         if (paramDecls.isNotBlank()) {
             js.evaluate(paramDecls, "paramDecls")
         }
@@ -247,11 +434,30 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
     }
 
     private fun buildParamsJson(params: Map<String, String>): String {
-        val entries = params.entries.joinToString(",") { (k, v) ->
-            "\"$k\":\"${v.replace("\"", "\\\"")}\""
-        }
+        // Names that don't match the identifier regex are skipped entirely.
+        // Values are JSON-encoded by Gson so any embedded quotes / backslashes /
+        // newlines cannot break out of the JS string literal.
+        val safe = params.entries.filter { (k, _) -> SAFE_PARAM_NAME.matches(k) }
+        val entries = safe.joinToString(",") { (k, v) -> "${gson.toJson(k)}:${gson.toJson(v)}" }
         return "{$entries}"
     }
+
+    /**
+     * Build the per-param `var X = ...;` declarations safely.
+     *
+     * Param names that are not valid JS identifiers are dropped (NOT injected
+     * verbatim) so a hostile preset can't smuggle code by naming a key
+     * `}; alert('x'); var x`. Values are emitted as JS literals via Gson, so a
+     * value containing quotes or a newline cannot terminate the surrounding
+     * string and start a new statement.
+     */
+    private fun buildSafeParamDecls(params: Map<String, String>): String =
+        params.entries
+            .filter { (k, _) -> SAFE_PARAM_NAME.matches(k) }
+            .joinToString("\n") { (k, v) ->
+                val numVal = v.toDoubleOrNull()
+                if (numVal != null) "var $k = $numVal;" else "var $k = ${gson.toJson(v)};"
+            }
 
     /** Build JSON object mapping interval keys to candle arrays, e.g. {"4h":[...], "1d":[...]} */
     private fun buildHtfJson(htfCandles: Map<String, List<Candle>>): String {
@@ -275,7 +481,13 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
         val stopLossPct: Double? = null,
         val takeProfitPct: Double? = null,
         val takeProfitLevels: List<LevelDto>? = null,
-        val stopLossLevels: List<LevelDto>? = null
+        val stopLossLevels: List<LevelDto>? = null,
+        val label: String? = null,
+        val orderType: String? = null,
+        val limitPrice: Double? = null,
+        val marketType: String? = null,
+        val leverage: Int? = null,
+        val marginType: String? = null
     )
     private data class LevelDto(val pct: Double? = null, val quantityPct: Double? = null)
 
@@ -288,11 +500,21 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
         val slLevels = dto.stopLossLevels?.mapNotNull { lv ->
             val p = lv.pct ?: return@mapNotNull null; TpSlLevel(p, lv.quantityPct ?: 100.0)
         } ?: emptyList()
+        val signalLabel = SignalLabel.from(dto.label)
+        val labelRaw = dto.label ?: ""
+        val signalOrdType = SignalOrderType.from(dto.orderType)
+        val mkt = runCatching { dto.marketType?.let { MarketType.valueOf(it.uppercase()) } }.getOrNull()
+        val mgn = runCatching { dto.marginType?.let { MarginType.valueOf(it.uppercase()) } }.getOrNull()
+        val lev = dto.leverage?.coerceIn(1, 125)
         return when (type) {
             "BUY" -> StrategySignal.BUY(sizePct = sizePct, stopLossPct = dto.stopLossPct, takeProfitPct = dto.takeProfitPct,
-                takeProfitLevels = tpLevels, stopLossLevels = slLevels)
+                takeProfitLevels = tpLevels, stopLossLevels = slLevels,
+                label = signalLabel, labelRaw = labelRaw, orderType = signalOrdType, limitPrice = dto.limitPrice,
+                marketType = mkt, leverage = lev, marginType = mgn)
             "SELL" -> StrategySignal.SELL(sizePct = sizePct, stopLossPct = dto.stopLossPct, takeProfitPct = dto.takeProfitPct,
-                takeProfitLevels = tpLevels, stopLossLevels = slLevels)
+                takeProfitLevels = tpLevels, stopLossLevels = slLevels,
+                label = signalLabel, labelRaw = labelRaw, orderType = signalOrdType, limitPrice = dto.limitPrice,
+                marketType = mkt, leverage = lev, marginType = mgn)
             "CLOSE_IF_LONG" -> StrategySignal.CLOSE_IF_LONG
             "CLOSE_IF_SHORT" -> StrategySignal.CLOSE_IF_SHORT
             else -> StrategySignal.HOLD
@@ -351,6 +573,14 @@ class ScriptEngine @Inject constructor() : ScriptExecutor {
     companion object {
         /** Maximum wall-clock time a single strategy() call may run. */
         private const val TIMEOUT_MS = 5_000L
+
+        /**
+         * Whitelist of legal JS identifiers we will inject as `var <name> = ...;`.
+         * Everything else (including reserved words is acceptable for our use \u2014
+         * QuickJS will surface a syntax error) is filtered to prevent code
+         * injection via param names from saved templates or shared presets.
+         */
+        private val SAFE_PARAM_NAME = Regex("^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
         val JS_INDICATOR_LIBRARY = """
 // ─── Indicator functions available to user scripts ─────────────
@@ -582,6 +812,46 @@ function adx(candles, period) {
         adxVal = (adxVal * (period - 1) + dxVals[i]) / period;
     }
     return adxVal;
+}
+
+function dmi(candles, period) {
+    if (!period) period = 14;
+    if (candles.length < period * 2 + 1) return {diPlus:0, diMinus:0, adx:25};
+    var pDM = [], nDM = [], trVals = [];
+    for (var i = 1; i < candles.length; i++) {
+        var upMove = candles[i].high - candles[i-1].high;
+        var downMove = candles[i-1].low - candles[i].low;
+        pDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+        nDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+        trVals.push(Math.max(candles[i].high - candles[i].low,
+                             Math.abs(candles[i].high - candles[i-1].close),
+                             Math.abs(candles[i].low - candles[i-1].close)));
+    }
+    var smoothTR = trVals.slice(0, period).reduce(function(a,b){return a+b;},0);
+    var smoothPDM = pDM.slice(0, period).reduce(function(a,b){return a+b;},0);
+    var smoothNDM = nDM.slice(0, period).reduce(function(a,b){return a+b;},0);
+    var dxVals = [];
+    var lastPDI = 0, lastNDI = 0;
+    for (var i = period; i < trVals.length; i++) {
+        if (i > period) {
+            smoothTR = smoothTR - smoothTR / period + trVals[i];
+            smoothPDM = smoothPDM - smoothPDM / period + pDM[i];
+            smoothNDM = smoothNDM - smoothNDM / period + nDM[i];
+        }
+        lastPDI = smoothTR > 0 ? 100 * smoothPDM / smoothTR : 0;
+        lastNDI = smoothTR > 0 ? 100 * smoothNDM / smoothTR : 0;
+        var diSum = lastPDI + lastNDI;
+        dxVals.push(diSum > 0 ? 100 * Math.abs(lastPDI - lastNDI) / diSum : 0);
+    }
+    if (dxVals.length < period) {
+        var lastDx = dxVals.length > 0 ? dxVals[dxVals.length - 1] : 25;
+        return {diPlus: lastPDI, diMinus: lastNDI, adx: lastDx};
+    }
+    var adxV = dxVals.slice(0, period).reduce(function(a,b){return a+b;},0) / period;
+    for (var i = period; i < dxVals.length; i++) {
+        adxV = (adxV * (period - 1) + dxVals[i]) / period;
+    }
+    return {diPlus: lastPDI, diMinus: lastNDI, adx: adxV};
 }
 
 function cci(candles, period) {
@@ -2974,6 +3244,349 @@ var _inputs = {};
 function input(name, defaultValue) {
     if (_inputs[name] !== undefined) return _inputs[name];
     return defaultValue;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Plot API  —  Strategies can call these to draw on the chart
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//  Usage inside strategy(candles):
+//    plot('EMA Fast', emaSeries(candles, 9), '#00E676');        // overlay line
+//    plotPanel('RSI', rsiSeries(candles, 14), '#F0883E');       // sub-panel
+//    hline(70, '#FF5252', 'Overbought');                       // horizontal line
+//    plotFill('EMA Fast', 'EMA Slow', 'rgba(0,230,118,0.1)');  // fill between
+//    plotLabel(candles.length-1, 'Entry!', 'below', '#00E676');
+//    plotBgColor(candles.length-1, 'rgba(0,230,118,0.08)');
+//
+//  The engine reads _state.plot after evaluate() and passes it to the chart.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _ensurePlot() {
+    if (typeof _state === 'undefined') _state = {};
+    if (!_state.plot) _state.plot = { overlays:[], panels:[], hlines:[], fills:[], labels:[], bgcolor:[] };
+    return _state.plot;
+}
+
+/**
+ * plot(name, values, color, lineWidth, lineStyle)
+ * Draw a line overlay on the main price chart.
+ * @param values — array of numbers/nulls, one per candle
+ */
+function plot(name, values, color, lineWidth, lineStyle) {
+    var p = _ensurePlot();
+    // Replace if same name already plotted
+    for (var i = 0; i < p.overlays.length; i++) { if (p.overlays[i].name === name) { p.overlays.splice(i,1); break; } }
+    p.overlays.push({ name: name, values: values, color: color || '#58A6FF', lineWidth: lineWidth || 2, lineStyle: lineStyle || 0 });
+}
+
+/**
+ * plotPanel(name, values, color, type, refLines, extraLines)
+ * Draw in a separate sub-chart below the main chart.
+ */
+function plotPanel(name, values, color, type, refLines, extraLines) {
+    var p = _ensurePlot();
+    for (var i = 0; i < p.panels.length; i++) { if (p.panels[i].name === name) { p.panels.splice(i,1); break; } }
+    p.panels.push({ name: name, values: values, color: color || '#9C27B0', type: type || 'line',
+        lines: refLines || [], extraLines: extraLines || [] });
+}
+
+/**
+ * hline(price, color, title, lineStyle)
+ * Draw a horizontal reference line on the main chart.
+ */
+function hline(price, color, title, lineStyle) {
+    var p = _ensurePlot();
+    p.hlines.push({ price: price, color: color || '#58A6FF', title: title || '', lineStyle: lineStyle != null ? lineStyle : 2 });
+}
+
+/**
+ * plotFill(line1name, line2name, color)
+ * Fill between two previously plotted overlays.
+ */
+function plotFill(line1name, line2name, color) {
+    var p = _ensurePlot();
+    p.fills.push({ line1: line1name, line2: line2name, color: color || 'rgba(88,166,255,0.15)' });
+}
+
+/**
+ * plotLabel(index, text, position, color)
+ * Place a text label at a specific candle index. position = 'above' or 'below'.
+ */
+function plotLabel(index, text, position, color) {
+    var p = _ensurePlot();
+    p.labels.push({ index: index, text: text, position: position || 'above', color: color || '#FFFFFF' });
+}
+
+/**
+ * plotBgColor(index, color)
+ * Tint the background of a specific candle.
+ */
+function plotBgColor(index, color) {
+    var p = _ensurePlot();
+    p.bgcolor.push({ index: index, color: color || 'rgba(88,166,255,0.1)' });
+}
+
+/** resetPlot() — clear all plot data (call at start of strategy if you rebuild every bar). */
+function resetPlot() {
+    if (typeof _state !== 'undefined') _state.plot = { overlays:[], panels:[], hlines:[], fills:[], labels:[], bgcolor:[] };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TFG Algo  —  port of indicators/tfg_algo.pine (UT Bot + LinReg Candles + STC)
+//  4-tier signal model:
+//    Tier 1 (✓✓ strong)  : UT trigger + LinReg bias confirms + STC at extreme reversal
+//    Tier 2 (✓  weak)    : UT trigger + LinReg confirms, STC neutral
+//    Tier 3 (✗  weak)    : UT trigger against LinReg bias but STC supports reversal
+//    Tier 4 (✗✗ counter) : UT trigger against LinReg and STC also against — avoid
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Heikin-Ashi close series (incremental). */
+function _haCloseSeries(candles) {
+    var out = []; var prevO = null, prevC = null;
+    for (var i = 0; i < candles.length; i++) {
+        var c = candles[i];
+        var hc = (c.open + c.high + c.low + c.close) / 4.0;
+        var ho = (prevO === null) ? (c.open + c.close) / 2.0 : (prevO + prevC) / 2.0;
+        out.push(hc);
+        prevO = ho; prevC = hc;
+    }
+    return out;
+}
+
+/**
+ * utBotSeries(candles, key, atrPeriod, useHA)
+ *  Returns { xATS:[], buy:[], sell:[], pos:[] } — full series. Last index is current bar.
+ */
+function utBotSeries(candles, key, atrPeriod, useHA) {
+    if (key == null) key = 1.0;
+    if (atrPeriod == null) atrPeriod = 10;
+    if (useHA == null) useHA = false;
+    var n = candles.length;
+    var srcArr = useHA ? _haCloseSeries(candles) : (function(){ var a=[]; for (var i=0;i<n;i++) a.push(candles[i].close); return a; })();
+    // ATR (Wilder, on real OHLC)
+    var atrArr = atrSeries(candles, atrPeriod);
+    var xATS = []; var buy = []; var sell = []; var pos = [];
+    var prevStop = 0.0; var prevPos = 0;
+    var prevEma1 = null; var prevSrc = null;
+    for (var i = 0; i < n; i++) {
+        var src = srcArr[i];
+        var atrV = atrArr[i];
+        if (atrV === null || i === 0) {
+            xATS.push(null); buy.push(false); sell.push(false); pos.push(0);
+            prevSrc = src; prevEma1 = src; continue;
+        }
+        var nLoss = key * atrV;
+        var stop;
+        if (src > prevStop && prevSrc > prevStop)      stop = Math.max(prevStop, src - nLoss);
+        else if (src < prevStop && prevSrc < prevStop) stop = Math.min(prevStop, src + nLoss);
+        else if (src > prevStop)                       stop = src - nLoss;
+        else                                            stop = src + nLoss;
+        var p;
+        if (prevSrc < prevStop && src > stop) p = 1;
+        else if (prevSrc > prevStop && src < stop) p = -1;
+        else p = prevPos;
+        // EMA(1) of src is just src itself
+        var ema1 = src;
+        var crossUp   = (prevEma1 !== null) && prevEma1 <= prevStop && ema1 > stop;
+        var crossDown = (prevEma1 !== null) && prevEma1 >= prevStop && ema1 < stop;
+        var bSig = src > stop && crossUp;
+        var sSig = src < stop && crossDown;
+        xATS.push(stop); buy.push(bSig); sell.push(sSig); pos.push(p);
+        prevStop = stop; prevPos = p; prevSrc = src; prevEma1 = ema1;
+    }
+    return { xATS: xATS, buy: buy, sell: sell, pos: pos };
+}
+
+/**
+ * linregCandlesSeries(candles, lrLen, sigLen, sigType)
+ *  Returns { bopen:[], bhigh:[], blow:[], bclose:[], sigLine:[] }
+ */
+function linregCandlesSeries(candles, lrLen, sigLen, sigType) {
+    if (lrLen == null) lrLen = 11;
+    if (sigLen == null) sigLen = 11;
+    if (sigType == null) sigType = 'SMA';
+    var n = candles.length;
+    var oArr=[], hArr=[], lArr=[], cArr=[];
+    for (var i = 0; i < n; i++) { oArr.push(candles[i].open); hArr.push(candles[i].high); lArr.push(candles[i].low); cArr.push(candles[i].close); }
+    var bopen  = lrLen > 1 ? linregSeries(oArr, lrLen) : oArr;
+    var bhigh  = lrLen > 1 ? linregSeries(hArr, lrLen) : hArr;
+    var blow   = lrLen > 1 ? linregSeries(lArr, lrLen) : lArr;
+    var bclose = lrLen > 1 ? linregSeries(cArr, lrLen) : cArr;
+    // Build sigLine = SMA/EMA over bclose (skip nulls at start)
+    var sigLine = [];
+    if (sigType === 'EMA') {
+        var mult = 2.0 / (sigLen + 1); var v = null; var sum = 0; var c = 0;
+        for (var i = 0; i < n; i++) {
+            if (bclose[i] === null) { sigLine.push(null); continue; }
+            if (v === null) {
+                sum += bclose[i]; c++;
+                if (c === sigLen) { v = sum / sigLen; sigLine.push(v); } else sigLine.push(null);
+            } else { v = (bclose[i] - v) * mult + v; sigLine.push(v); }
+        }
+    } else {
+        // SMA over last sigLen non-null bclose
+        var window = [];
+        for (var i = 0; i < n; i++) {
+            if (bclose[i] === null) { sigLine.push(null); continue; }
+            window.push(bclose[i]);
+            if (window.length > sigLen) window.shift();
+            if (window.length === sigLen) {
+                var s = 0; for (var j = 0; j < sigLen; j++) s += window[j];
+                sigLine.push(s / sigLen);
+            } else sigLine.push(null);
+        }
+    }
+    return { bopen: bopen, bhigh: bhigh, blow: blow, bclose: bclose, sigLine: sigLine };
+}
+
+/**
+ * stcSeries(candles, length, fast, slow, smooth)
+ *  Returns { stc:[], rising:[] } — Schaff Trend Cycle.
+ *  NOTE: Uses Pine-compatible EMA seeding (ema[0] = src[0], no SMA seed)
+ *  so values match TradingView's ta.ema-based STC bar-for-bar.
+ */
+function stcSeries(candles, length, fast, slow, smooth) {
+    if (length == null) length = 12;
+    if (fast == null) fast = 26;
+    if (slow == null) slow = 50;
+    if (smooth == null) smooth = 0.5;
+    var n = candles.length;
+    if (n === 0) return { stc: [], rising: [] };
+    // Pine ta.ema semantics: ema[0] = src[0]; ema[i] = alpha*src + (1-alpha)*ema[i-1]
+    function _pineEmaArr(arr, period) {
+        var out = []; var alpha = 2.0 / (period + 1); var prev = null;
+        for (var k = 0; k < arr.length; k++) {
+            if (arr[k] === null) { out.push(prev); continue; }
+            if (prev === null) prev = arr[k];
+            else prev = alpha * arr[k] + (1 - alpha) * prev;
+            out.push(prev);
+        }
+        return out;
+    }
+    var closeArr = []; for (var k = 0; k < n; k++) closeArr.push(candles[k].close);
+    var emaF = _pineEmaArr(closeArr, fast);
+    var emaS = _pineEmaArr(closeArr, slow);
+    // macdLine = emaF - emaS (Pine produces values from bar 0)
+    var m = []; for (var i = 0; i < n; i++) {
+        if (emaF[i] === null || emaS[i] === null) m.push(null); else m.push(emaF[i] - emaS[i]);
+    }
+    var f1 = []; var pff = []; var f2 = []; var pf = [];
+    var prevF1 = null, prevPff = null, prevF2 = null, prevPf = null;
+    for (var i = 0; i < n; i++) {
+        if (m[i] === null) { f1.push(null); pff.push(null); f2.push(null); pf.push(null); continue; }
+        // window of m for stochastic-like normalization
+        var lo = Infinity, hi = -Infinity, cnt = 0;
+        for (var j = Math.max(0, i - length + 1); j <= i; j++) {
+            if (m[j] !== null) { if (m[j] < lo) lo = m[j]; if (m[j] > hi) hi = m[j]; cnt++; }
+        }
+        var v1 = lo, v2 = hi - lo;
+        var f1v = v2 > 0 ? (m[i] - v1) / v2 * 100 : (prevF1 !== null ? prevF1 : 0);
+        f1.push(f1v);
+        var pffv = (prevF1 === null || prevPff === null) ? f1v : prevPff + smooth * (f1v - prevPff);
+        pff.push(pffv);
+        // Now stochastic-like over pff window
+        var lo2 = Infinity, hi2 = -Infinity;
+        for (var j = Math.max(0, i - length + 1); j <= i; j++) {
+            if (pff[j] !== null) { if (pff[j] < lo2) lo2 = pff[j]; if (pff[j] > hi2) hi2 = pff[j]; }
+        }
+        var v3 = lo2, v4 = hi2 - lo2;
+        var f2v = v4 > 0 ? (pffv - v3) / v4 * 100 : (prevF2 !== null ? prevF2 : 0);
+        f2.push(f2v);
+        var pfv = (prevF2 === null || prevPf === null) ? f2v : prevPf + smooth * (f2v - prevPf);
+        pf.push(pfv);
+        prevF1 = f1v; prevPff = pffv; prevF2 = f2v; prevPf = pfv;
+    }
+    var rising = [];
+    for (var i = 0; i < n; i++) {
+        if (i === 0 || pf[i] === null || pf[i-1] === null) rising.push(false);
+        else rising.push(pf[i] > pf[i-1]);
+    }
+    return { stc: pf, rising: rising };
+}
+
+/**
+ * tfgAlgoSignal(candles, opts) — high-level wrapper combining UT Bot + LinReg + STC.
+ *  opts (all optional):
+ *    utKey=1.0, utAtr=10, useHA=false,
+ *    lrLen=11, sigLen=11, sigType='SMA',
+ *    stcLen=12, stcFast=26, stcSlow=50, stcSmooth=0.5,
+ *    stcOS=25, stcOB=75, useSTC=true
+ *  Returns { action:'BUY'|'SELL'|'HOLD', tier:1|2|3|4|0, strong:bool, reason:string,
+ *            stc, sigLine, bclose, xATS }
+ */
+function tfgAlgoSignal(candles, opts) {
+    opts = opts || {};
+    var utKey = opts.utKey != null ? opts.utKey : 1.0;
+    var utAtr = opts.utAtr != null ? opts.utAtr : 10;
+    var useHA = opts.useHA != null ? opts.useHA : false;
+    var lrLen = opts.lrLen != null ? opts.lrLen : 11;
+    var sigLen = opts.sigLen != null ? opts.sigLen : 11;
+    var sigType = opts.sigType || 'SMA';
+    var stcLen = opts.stcLen != null ? opts.stcLen : 12;
+    var stcFast = opts.stcFast != null ? opts.stcFast : 26;
+    var stcSlow = opts.stcSlow != null ? opts.stcSlow : 50;
+    var stcSmooth = opts.stcSmooth != null ? opts.stcSmooth : 0.5;
+    var OS = opts.stcOS != null ? opts.stcOS : 25;
+    var OB = opts.stcOB != null ? opts.stcOB : 75;
+    var useSTC = opts.useSTC != null ? opts.useSTC : true;
+
+    var i = candles.length - 1;
+    if (i < Math.max(utAtr, lrLen, sigLen, stcSlow) + 2) {
+        return { action:'HOLD', tier:0, strong:false, reason:'warmup', stc:null, sigLine:null, bclose:null, xATS:null };
+    }
+    var ut = utBotSeries(candles, utKey, utAtr, useHA);
+    var lr = linregCandlesSeries(candles, lrLen, sigLen, sigType);
+    var st = stcSeries(candles, stcLen, stcFast, stcSlow, stcSmooth);
+
+    var utBuy = ut.buy[i] === true;
+    var utSell = ut.sell[i] === true;
+    var bclose = lr.bclose[i];
+    var sig = lr.sigLine[i];
+    var stcVal = st.stc[i];
+    var stcRising = st.rising[i];
+
+    var lrOk = (bclose != null && sig != null);
+    var stcOk = (stcVal != null);
+
+    // ── STC-active tiers (mirror Pine t1..t4 Buy/Sell exactly) ──
+    var t1Buy_a = utBuy  && lrOk && bclose >= sig && stcOk && stcVal <  OS && stcRising;
+    var t2Buy_a = utBuy  && lrOk && bclose >= sig && !(stcOk && stcVal <  OS && stcRising);
+    var t3Buy_a = utBuy  && lrOk && bclose <  sig && stcOk && stcVal <= OB;
+    var t4Buy_a = utBuy  && lrOk && bclose <  sig && stcOk && stcVal >  OB;
+    var t1Sell_a = utSell && lrOk && bclose <= sig && stcOk && stcVal >  OB && !stcRising;
+    var t2Sell_a = utSell && lrOk && bclose <= sig && !(stcOk && stcVal >  OB && !stcRising);
+    var t3Sell_a = utSell && lrOk && bclose >  sig && stcOk && stcVal >= OS;
+    var t4Sell_a = utSell && lrOk && bclose >  sig && stcOk && stcVal <  OS;
+
+    // ── 2-layer fallback (useSTC=false): only t1/t3 fire ──
+    var t1Buy_f  = utBuy  && lrOk && bclose >= sig;
+    var t3Buy_f  = utBuy  && lrOk && bclose <  sig;
+    var t1Sell_f = utSell && lrOk && bclose <= sig;
+    var t3Sell_f = utSell && lrOk && bclose >  sig;
+
+    var fin1Buy  = useSTC ? t1Buy_a  : t1Buy_f;
+    var fin2Buy  = useSTC ? t2Buy_a  : false;
+    var fin3Buy  = useSTC ? t3Buy_a  : t3Buy_f;
+    var fin4Buy  = useSTC ? t4Buy_a  : false;
+    var fin1Sell = useSTC ? t1Sell_a : t1Sell_f;
+    var fin2Sell = useSTC ? t2Sell_a : false;
+    var fin3Sell = useSTC ? t3Sell_a : t3Sell_f;
+    var fin4Sell = useSTC ? t4Sell_a : false;
+
+    var action = 'HOLD'; var tier = 0; var strong = false; var reason = '';
+    if (fin1Buy)       { action='BUY';  tier=1; strong=true;  reason='UT+LR↑+STC oversold rising'; }
+    else if (fin2Buy)  { action='BUY';  tier=2; strong=false; reason='UT+LR↑'; }
+    else if (fin3Buy)  { action='BUY';  tier=3; strong=false; reason='UT against LR but STC ok'; }
+    else if (fin4Buy)  { action='BUY';  tier=4; strong=false; reason='UT counter-trend (avoid)'; }
+    else if (fin1Sell) { action='SELL'; tier=1; strong=true;  reason='UT+LR↓+STC overbought falling'; }
+    else if (fin2Sell) { action='SELL'; tier=2; strong=false; reason='UT+LR↓'; }
+    else if (fin3Sell) { action='SELL'; tier=3; strong=false; reason='UT against LR but STC ok'; }
+    else if (fin4Sell) { action='SELL'; tier=4; strong=false; reason='UT counter-trend (avoid)'; }
+
+    return {
+        action: action, tier: tier, strong: strong, reason: reason,
+        stc: stcVal, sigLine: sig, bclose: bclose, xATS: ut.xATS[i]
+    };
 }
 """.trimIndent()
     }

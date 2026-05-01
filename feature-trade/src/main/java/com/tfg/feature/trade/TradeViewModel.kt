@@ -24,6 +24,12 @@ data class TradeUiState(
     val trailingPercent: String = "",
     val stopPrice: String = "",
     val isPaper: Boolean = false,
+    // Futures
+    val marketType: MarketType = MarketType.SPOT,
+    val leverage: Int = 1,
+    val marginType: MarginType = MarginType.ISOLATED,
+    val positionSide: PositionSide = PositionSide.BOTH,
+    val reduceOnly: Boolean = false,
     val openOrders: List<Order> = emptyList(),
     val orderHistory: List<Order> = emptyList(),
     val error: String? = null,
@@ -57,7 +63,11 @@ class TradeViewModel @Inject constructor(
                     val ticker = tickers.find { it.symbol == symbol }
                     _state.update { it.copy(ticker = ticker, price = ticker?.price?.toString() ?: "") }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                // Surface ticker refresh failure so the user knows the price is stale.
+                timber.log.Timber.w(e, "Ticker stream failed for $symbol")
+                _state.update { it.copy(error = "Live price unavailable: ${e.message ?: "stream error"}") }
+            }
         }
     }
 
@@ -89,6 +99,13 @@ class TradeViewModel @Inject constructor(
     fun setTrailingPercent(p: String) = _state.update { it.copy(trailingPercent = p) }
     fun setStopPrice(p: String) = _state.update { it.copy(stopPrice = p) }
     fun togglePaper() = _state.update { it.copy(isPaper = !it.isPaper) }
+    fun setMarketType(t: MarketType) = _state.update {
+        it.copy(marketType = t, leverage = if (t == MarketType.SPOT) 1 else it.leverage.coerceAtLeast(1))
+    }
+    fun setLeverage(x: Int) = _state.update { it.copy(leverage = x.coerceIn(1, 125)) }
+    fun setMarginType(m: MarginType) = _state.update { it.copy(marginType = m) }
+    fun setPositionSide(p: PositionSide) = _state.update { it.copy(positionSide = p) }
+    fun toggleReduceOnly() = _state.update { it.copy(reduceOnly = !it.reduceOnly) }
 
     fun placeOrder() {
         _state.update { it.copy(isLoading = true, error = null) }
@@ -130,7 +147,12 @@ class TradeViewModel @Inject constructor(
                 trailingStopPercent = s.trailingPercent.toDoubleOrNull(),
                 executionMode = if (s.isPaper) ExecutionMode.PAPER else ExecutionMode.LIVE,
                 isPaperTrade = s.isPaper,
-                status = OrderStatus.NEW
+                status = OrderStatus.NEW,
+                marketType = s.marketType,
+                leverage = if (s.marketType == MarketType.FUTURES_USDM) s.leverage else 1,
+                marginType = s.marginType,
+                positionSide = s.positionSide,
+                reduceOnly = s.marketType == MarketType.FUTURES_USDM && s.reduceOnly
             )
 
             placeOrderUseCase(order)

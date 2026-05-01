@@ -6,8 +6,8 @@ import com.tfg.domain.model.BacktestResult
 import com.tfg.domain.model.Candle
 import com.tfg.domain.model.CustomTemplate
 import com.tfg.domain.model.MonteCarloResult
-import com.tfg.domain.model.OrderSide
 import com.tfg.domain.model.Script
+import com.tfg.domain.model.ScriptExecutor
 import com.tfg.domain.model.SignalMarker
 import com.tfg.domain.model.SignalType
 import com.tfg.domain.model.StrategyTemplate
@@ -18,6 +18,8 @@ import com.tfg.domain.model.toCsv
 import com.tfg.domain.model.runMonteCarlo
 import com.tfg.domain.repository.MarketRepository
 import com.tfg.domain.repository.ScriptRepository
+import com.tfg.domain.service.ConsoleBus
+import com.tfg.domain.service.ConsoleSource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import javax.inject.Inject
 
 val BACKTEST_INTERVALS = listOf("1m", "5m", "15m", "30m", "1h", "4h", "1d")
@@ -90,6 +93,10 @@ data class ScriptUiState(
     val backtestMakerFee: Double = 0.1,       // % (default 0.1%)
     val backtestTakerFee: Double = 0.1,       // %
     val backtestSlippagePct: Double = 0.0,     // %
+    val backtestStartingCapital: Double = 10_000.0, // USD
+    // ── Backtest Market Type / Leverage Override ──
+    val backtestMarketType: com.tfg.domain.model.MarketType = com.tfg.domain.model.MarketType.SPOT,
+    val backtestLeverage: Int = 1,
     // ── Backtest Date Range (C2) ──
     val backtestStartDateMs: Long? = null,     // null = use days
     val backtestEndDateMs: Long? = null,
@@ -98,7 +105,10 @@ data class ScriptUiState(
     // ── Monte Carlo (C4) ──
     val monteCarloResult: MonteCarloResult? = null,
     // ── Multi-Symbol Backtest (C1) ──
-    val backtestSymbols: List<String> = emptyList()  // empty = single-symbol mode
+    val backtestSymbols: List<String> = emptyList(),  // empty = single-symbol mode
+    // ── Strategy plot overlays & dashboard (from ScriptExecutor) ──
+    val strategyPlotJson: String? = null,
+    val dashboardOverlayJson: String? = null
 )
 
 val POPULAR_PAIRS = listOf(
@@ -224,7 +234,9 @@ function strategy(candles) {
 @HiltViewModel
 class ScriptViewModel @Inject constructor(
     private val scriptRepository: ScriptRepository,
-    private val marketRepository: MarketRepository
+    private val marketRepository: MarketRepository,
+    private val scriptExecutor: ScriptExecutor,
+    private val consoleBus: ConsoleBus
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ScriptUiState())
@@ -295,6 +307,97 @@ class ScriptViewModel @Inject constructor(
         }
     }
 
+    /** Run a final evaluate on current candles to capture plot() overlays and dashboard. */
+    private fun refreshPlotData() {
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val s = _state.value
+                val candles = s.candles
+                if (candles.size < 10) return@launch
+                scriptExecutor.evaluate(s.code, candles, s.editableParams)
+                val plotJson = scriptExecutor.getLastPlotData()
+                val rawDashJson = scriptExecutor.getLastDashboard()
+                val dashJson = rawDashJson?.let { buildDashboardOverlayJson(it) }
+                _state.update { it.copy(strategyPlotJson = plotJson, dashboardOverlayJson = dashJson) }
+            } catch (_: Exception) { /* ignore evaluation errors */ }
+        }
+    }
+
+    /** Transform raw _state.dashboard JSON into the format chart.html setDashboard() expects. */
+    private fun buildDashboardOverlayJson(rawJson: String): String? {
+        return try {
+            val obj = org.json.JSONObject(rawJson)
+            // Detect TFG_ALGO_PINE-format dashboards (UT Bot + LinReg + STC), distinct
+            // from the legacy 10-factor TFG_ALGO scoring layout.
+            val isPineAlgo = obj.has("tier") || obj.has("stc") || obj.has("sigLine") || obj.has("xATS")
+            if (isPineAlgo) return buildPineAlgoOverlay(obj)
+            val rows = org.json.JSONArray()
+            fun addRow(label: String, passKey: String, status: String) {
+                val pass = obj.optInt(passKey, 0) == 1
+                rows.put(org.json.JSONObject().put("label", label).put("pass", pass).put("status", status))
+            }
+            addRow("Trend", "c_trend", if (obj.optInt("c_trend") == 1) "Bullish" else "Bearish")
+            addRow("VWAP", "c_vwap", if (obj.optInt("c_vwap") == 1) "Above" else "Below")
+            addRow("Volume", "c_volume", if (obj.optInt("c_volume") == 1) "Strong" else "Weak")
+            addRow("RSI", "c_rsi", String.format("%.1f", obj.optDouble("rsiVal", 0.0)))
+            addRow("MACD", "c_macd", if (obj.optInt("c_macd") == 1) "Bullish" else "Bearish")
+            addRow("Candle", "c_candle", when {
+                obj.optInt("bullEngulf") == 1 -> "Engulfing"
+                obj.optInt("bullPinBar") == 1 -> "Pin Bar"
+                obj.optInt("strongBull") == 1 -> "Strong Bull"
+                else -> "Neutral"
+            })
+            addRow("Support", "c_support", obj.optDouble("supportLevel", 0.0).let {
+                if (it > 0) String.format("S:%.2f", it) else "—"
+            })
+            addRow("DI+/DI-", "c_di", String.format("%.1f/%.1f", obj.optDouble("diPlus", 0.0), obj.optDouble("diMinus", 0.0)))
+            addRow("ADX", "c_adx", String.format("%.1f", obj.optDouble("adxVal", 0.0)))
+            addRow("Breakout", "c_breakout", if (obj.optInt("c_breakout") == 1) "Yes" else "No")
+            org.json.JSONObject().apply {
+                put("title", "TFG ALGO")
+                put("score", obj.optInt("score", 0))
+                put("maxScore", 10)
+                put("rows", rows)
+                put("inPosition", obj.optInt("inPosition", 0) == 1)
+                put("pnlPct", obj.optDouble("pnlPct", 0.0))
+                put("htfBull", obj.optInt("htfBull", 1) == 1)
+            }.toString()
+        } catch (_: Exception) { null }
+    }
+
+    /** Dashboard overlay for TFG_ALGO_PINE template (UT Bot + LinReg + STC). */
+    private fun buildPineAlgoOverlay(obj: org.json.JSONObject): String {
+        val rows = org.json.JSONArray()
+        fun row(label: String, pass: Boolean, status: String) {
+            rows.put(org.json.JSONObject().put("label", label).put("pass", pass).put("status", status))
+        }
+        val action = obj.optString("action", "HOLD")
+        val tier = obj.optInt("tier", 0)
+        val strong = obj.optInt("strong", 0) == 1
+        val stc = obj.optDouble("stc", 0.0)
+        val sigLine = obj.optDouble("sigLine", 0.0)
+        val bclose = obj.optDouble("bclose", 0.0)
+        val xATS = obj.optDouble("xATS", 0.0)
+        val market = obj.optString("market", "SPOT")
+        val leverage = obj.optInt("leverage", 1)
+        row("Signal", action != "HOLD", action)
+        row("Tier", tier in 1..3, if (tier > 0) "T$tier${if (strong) "★" else ""}" else "—")
+        row("STC", stc < 25 || stc > 75, String.format("%.1f", stc))
+        row("LinReg vs Sig", bclose >= sigLine, if (bclose >= sigLine) "Above" else "Below")
+        row("UT Trail", action == "BUY" && bclose > xATS || action == "SELL" && bclose < xATS,
+            String.format("%.4f", xATS))
+        row("Market", true, "$market${if (market == "FUTURES_USDM") " ${leverage}x" else ""}")
+        return org.json.JSONObject().apply {
+            put("title", "ISSA ALGO")
+            put("score", tier)
+            put("maxScore", 4)
+            put("rows", rows)
+            put("inPosition", false)
+            put("pnlPct", 0.0)
+            put("htfBull", true)
+        }.toString()
+    }
+
     fun updateCode(code: String) {
         val extracted = extractParamsFromCode(code)
         _state.update {
@@ -320,6 +423,71 @@ class ScriptViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Run the script ONCE on the current candles to surface runtime errors that
+     * the backtest loop would otherwise swallow (e.g. ReferenceError thrown
+     * inside strategy()). Result is dumped into the console so the user can
+     * read the exact exception message + any console.log output.
+     */
+    fun checkRuntime() {
+        viewModelScope.launch(Dispatchers.Default) {
+            val s = _state.value
+            // Need *some* candles. If the chart hasn't loaded any yet, fall back
+            // to a synthetic warmup so the user can still get a quick syntax
+            // + runtime sanity check without waiting for a Binance round-trip.
+            val candles = if (s.candles.size >= 50) s.candles else buildSyntheticCandles(s.selectedPair, s.backtestInterval, 600)
+            // Show a "running…" line immediately in the console panel
+            _state.update { it.copy(console = listOf("[CHECK] Running on ${candles.size} bars…")) }
+
+            val res = scriptExecutor.runtimeCheck(s.code, candles, s.editableParams)
+
+            // Build console lines that will appear in the panel
+            val lines = mutableListOf<String>()
+            if (res.ok) {
+                lines += "[CHECK] ✓ OK  signal=${res.signalType}  time=${res.elapsedMs} ms"
+            } else {
+                lines += "[ERROR] ✗ FAILED after ${res.elapsedMs} ms"
+                lines += "[ERROR] ${res.errorMessage}"
+            }
+            // Append any console.log/warn/error lines the script emitted
+            if (res.logs.isNotEmpty()) {
+                lines += "[CHECK] --- console output (${res.logs.size} lines) ---"
+                lines += res.logs.take(100)
+                if (res.logs.size > 100) lines += "… (${res.logs.size - 100} more lines suppressed)"
+            } else {
+                lines += "[CHECK] (no console.log output)"
+            }
+            _state.update { it.copy(console = lines) }
+        }
+    }
+
+    /** Generate fake but plausible OHLCV bars for runtime checks when no real candles are loaded yet. */
+    private fun buildSyntheticCandles(symbol: String, interval: String, count: Int): List<Candle> {
+        val intervalMs = when (interval) {
+            "1m" -> 60_000L; "5m" -> 300_000L; "15m" -> 900_000L; "30m" -> 1_800_000L
+            "1h" -> 3_600_000L; "4h" -> 14_400_000L; "1d" -> 86_400_000L; else -> 3_600_000L
+        }
+        val now = System.currentTimeMillis()
+        var price = 50_000.0
+        val rnd = java.util.Random(42L)
+        return List(count) { idx ->
+            val open = price
+            val drift = (rnd.nextGaussian() * 0.005) * price
+            val close = (open + drift).coerceAtLeast(1.0)
+            val high = maxOf(open, close) + Math.abs(rnd.nextGaussian()) * 0.002 * price
+            val low = minOf(open, close) - Math.abs(rnd.nextGaussian()) * 0.002 * price
+            price = close
+            val openTime = now - (count - idx).toLong() * intervalMs
+            Candle(
+                symbol = symbol, interval = interval, openTime = openTime,
+                open = open, high = high, low = low, close = close,
+                volume = 100.0 + Math.abs(rnd.nextGaussian()) * 50,
+                closeTime = openTime + intervalMs - 1,
+                quoteVolume = 0.0, numberOfTrades = 0
+            )
+        }
+    }
+
     fun clearConsole() {
         _state.update { it.copy(console = emptyList()) }
     }
@@ -342,10 +510,12 @@ class ScriptViewModel @Inject constructor(
     }
 
     fun updateParam(key: String, value: String) {
+        // Only update the editable map. We DO NOT touch the code on every
+        // keystroke — partial / empty values used to silently corrupt the
+        // source via regex (eating across newlines), which made the field
+        // unable to recover once cleared. Code is synced on Apply / before run.
         _state.update {
-            val newParams = it.editableParams + (key to value)
-            val newCode = injectParamIntoCode(it.code, key, value)
-            it.copy(editableParams = newParams, code = newCode)
+            it.copy(editableParams = it.editableParams + (key to value))
         }
     }
 
@@ -353,6 +523,35 @@ class ScriptViewModel @Inject constructor(
     fun updateBacktestMakerFee(pct: Double) { _state.update { it.copy(backtestMakerFee = pct) } }
     fun updateBacktestTakerFee(pct: Double) { _state.update { it.copy(backtestTakerFee = pct) } }
     fun updateBacktestSlippage(pct: Double) { _state.update { it.copy(backtestSlippagePct = pct) } }
+    fun updateBacktestStartingCapital(amount: Double) { _state.update { it.copy(backtestStartingCapital = amount.coerceAtLeast(1.0)) } }
+    fun updateBacktestMarketType(mt: com.tfg.domain.model.MarketType) { _state.update { it.copy(backtestMarketType = mt) } }
+    fun updateBacktestLeverage(lev: Int) { _state.update { it.copy(backtestLeverage = lev.coerceIn(1, 125)) } }
+
+    /** Returns the trading plan for the current script (defaults if none saved). */
+    fun currentPlan(): com.tfg.domain.model.TradingPlan =
+        com.tfg.domain.model.TradingPlan.fromJson(_state.value.editableParams[com.tfg.domain.model.TradingPlan.PARAM_KEY])
+
+    /** Persists the user's trading plan into editable params + DB. */
+    fun savePlan(plan: com.tfg.domain.model.TradingPlan) {
+        _state.update {
+            val newParams = it.editableParams.toMutableMap().also { m ->
+                m[com.tfg.domain.model.TradingPlan.PARAM_KEY] = plan.toJson()
+            }
+            it.copy(editableParams = newParams)
+        }
+        // Persist to DB if a script is loaded
+        viewModelScope.launch {
+            val s = _state.value.selectedScript
+            if (s != null) {
+                scriptRepository.save(
+                    s.copy(
+                        params = _state.value.editableParams,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+    }
     fun updateBacktestStartDate(ms: Long?) { _state.update { it.copy(backtestStartDateMs = ms) } }
     fun updateBacktestEndDate(ms: Long?) { _state.update { it.copy(backtestEndDateMs = ms) } }
 
@@ -373,7 +572,16 @@ class ScriptViewModel @Inject constructor(
     }
 
     fun applyParamsToCode() {
-        // Save current code + params to DB
+        // Sync the editable params into the source code (skipping blanks),
+        // then persist. Called on the Apply button and implicitly before any
+        // backtest so the JS engine sees the latest user inputs.
+        _state.update { s ->
+            var code = s.code
+            s.editableParams.forEach { (k, v) ->
+                if (v.isNotBlank()) code = injectParamIntoCode(code, k, v)
+            }
+            s.copy(code = code)
+        }
         val script = _state.value.selectedScript ?: return
         viewModelScope.launch {
             val updated = script.copy(
@@ -435,11 +643,21 @@ class ScriptViewModel @Inject constructor(
         } else {
             _state.value.templates.firstOrNull { it.id.name == script.strategyTemplateId }?.defaultParams ?: emptyMap()
         }
-        val templateName = _state.value.templates.firstOrNull { it.id.name == script.strategyTemplateId }?.name
+        val template = _state.value.templates.firstOrNull { it.id.name == script.strategyTemplateId }
+        val templateName = template?.name
+        // Recovery path: if a saved script has blank or syntactically broken
+        // code (possible after older buggy param-injection corrupted it) and
+        // we know which template it came from, restore the template's fresh
+        // code. The user keeps their custom params; only the source is reset.
+        val storedCode = script.code
+        val effectiveCode = if (template != null && (storedCode.isBlank() ||
+                scriptRepository.validateSyntax(storedCode) != null)) {
+            template.code
+        } else storedCode
         _state.update {
             it.copy(
                 selectedScript = script,
-                code = script.code,
+                code = effectiveCode,
                 currentTemplateName = templateName,
                 editableParams = params,
                 showSettings = params.isNotEmpty()
@@ -491,10 +709,36 @@ class ScriptViewModel @Inject constructor(
             ?: _state.value.templates.firstOrNull { it.code.trim() == _state.value.code.trim() }?.id?.name
             ?: ""
 
-        backtestJob?.cancel()
+        val previousJob = backtestJob
         backtestJob = viewModelScope.launch {
-            _state.update { it.copy(isRunning = true, backtestProgress = 0f, error = null, console = emptyList(), selectedPair = symbol, backtestInterval = interval) }
+            // Wait for the previous run to fully cancel — without this, the JS
+            // worker pool can still be in use when we try to reset it, causing
+            // the second backtest to silently produce nothing.
+            try { previousJob?.cancelAndJoin() } catch (_: CancellationException) {}
+            consoleBus.info(
+                ConsoleSource.BACKTEST,
+                title = "Backtest started",
+                message = "$symbol $interval • ${days}d window",
+                symbol = symbol
+            )
+            _state.update { it.copy(
+                isRunning = true, backtestProgress = 0f, error = null,
+                console = listOf("[backtest] starting $symbol $interval ${days}d…"),
+                signalMarkers = emptyList(), backtestResult = null,
+                selectedPair = symbol, backtestInterval = interval
+            ) }
             try {
+                // Make sure any pending edits in the Strategy Settings panel
+                // are baked into the source code BEFORE we save + run, so the
+                // JS engine sees the user's latest inputs even if they didn't
+                // press the Apply button.
+                _state.update { s ->
+                    var code = s.code
+                    s.editableParams.forEach { (k, v) ->
+                        if (v.isNotBlank()) code = injectParamIntoCode(code, k, v)
+                    }
+                    s.copy(code = code)
+                }
                 // Auto-save current code + params before running
                 val scriptId = ensureScriptSaved(resolvedTemplateId)
 
@@ -505,39 +749,68 @@ class ScriptViewModel @Inject constructor(
                     takerFeePct = _state.value.backtestTakerFee / 100.0,
                     slippagePct = _state.value.backtestSlippagePct,
                     startDateMs = _state.value.backtestStartDateMs,
-                    endDateMs = _state.value.backtestEndDateMs
+                    endDateMs = _state.value.backtestEndDateMs,
+                    marketTypeOverride = _state.value.backtestMarketType,
+                    leverageOverride = _state.value.backtestLeverage,
+                    startingCapital = _state.value.backtestStartingCapital
                 )
-                // Generate signal markers from backtest trades for chart overlay
-                val markers = result.trades.flatMap { trade ->
-                    listOfNotNull(
-                        SignalMarker(
-                            id = "bt_entry_${trade.entryTime}",
-                            scriptId = scriptId,
-                            symbol = symbol,
-                            interval = interval,
-                            openTime = trade.entryTime,
-                            signalType = if (trade.side == OrderSide.BUY) SignalType.BUY else SignalType.SELL,
-                            price = trade.entryPrice
-                        ),
-                        if (trade.exitTime > 0) SignalMarker(
-                            id = "bt_exit_${trade.exitTime}",
-                            scriptId = scriptId,
-                            symbol = symbol,
-                            interval = interval,
-                            openTime = trade.exitTime,
-                            signalType = SignalType.CLOSE,
-                            price = trade.exitPrice
-                        ) else null
+                // Load actual signal markers from DB (preserves TP_HIT, SL_HIT, PAT_BUY types).
+                // Backtest impl wipes prior markers for this symbol before inserting,
+                // so everything returned here belongs to this run.
+                val markers = scriptRepository.getSignalMarkers(symbol, interval).first()
+                val logs = scriptRepository.getLastLogs()
+                val summary = listOf(
+                    "[backtest] done: ${result.totalTrades} trades, ${markers.size} signals, " +
+                    "PnL=${"%.2f".format(result.totalPnl)} winRate=${"%.1f".format(result.winRate)}%"
+                )
+                _state.update { it.copy(
+                    isRunning = false, backtestResult = result, signalMarkers = markers,
+                    console = summary + logs
+                ) }
+                // Emit a structured "done" event so the global Console can pick it up.
+                if (result.totalTrades == 0 && markers.isEmpty()) {
+                    consoleBus.warn(
+                        ConsoleSource.BACKTEST,
+                        title = "Backtest produced no trades",
+                        message = "$symbol $interval — strategy returned HOLD on every bar. " +
+                            "Likely cause: parameters too strict, JS error in strategy() (check Logcat), " +
+                            "or insufficient candles for the indicator window.",
+                        symbol = symbol
+                    )
+                } else {
+                    consoleBus.success(
+                        ConsoleSource.BACKTEST,
+                        title = "Backtest complete",
+                        message = "${result.totalTrades} trades • ${markers.size} signals • " +
+                            "PnL ${"%.2f".format(result.totalPnl)} • " +
+                            "win ${"%.1f".format(result.winRate)}%",
+                        symbol = symbol
                     )
                 }
-                val logs = scriptRepository.getLastLogs()
-                _state.update { it.copy(isRunning = false, backtestResult = result, signalMarkers = markers, console = logs) }
+                logs.forEach { line ->
+                    if (line.isNotBlank()) consoleBus.debug(ConsoleSource.STRATEGY, line, symbol = symbol)
+                }
                 // Reload candles from DB (backtest already stored them) — don't re-fetch from API
                 loadBacktestCandles()
+                // Evaluate strategy on final candles to capture plot overlays & dashboard
+                refreshPlotData()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(isRunning = false, error = "Backtest failed: ${e.message ?: "Unknown error"}") }
+                // Surface the failure into the console panel so the user can see it.
+                val msg = "Backtest failed: ${e.message ?: e::class.simpleName ?: "Unknown error"}"
+                val stack = e.stackTraceToString().lineSequence().take(8).toList()
+                _state.update { it.copy(
+                    isRunning = false,
+                    error = msg,
+                    console = listOf("[ERROR] $msg") + stack
+                ) }
+                consoleBus.error(
+                    ConsoleSource.BACKTEST,
+                    title = "Backtest failed",
+                    message = msg + "\n" + stack.joinToString("\n"),
+                    symbol = symbol
+                )
             }
         }
     }

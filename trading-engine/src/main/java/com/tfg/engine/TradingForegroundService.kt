@@ -9,6 +9,7 @@ import androidx.core.app.NotificationCompat
 import com.tfg.data.local.dao.*
 import com.tfg.data.local.mapper.EntityMapper.toDomain
 import com.tfg.data.local.mapper.EntityMapper.toEntity
+import com.tfg.data.remote.api.UserDataStreamManager
 import com.tfg.data.remote.websocket.WebSocketManager
 import com.tfg.domain.model.*
 import com.tfg.domain.repository.AuditRepository
@@ -30,6 +31,8 @@ class TradingForegroundService : Service() {
     @Inject lateinit var strategyRunner: StrategyRunner
     @Inject lateinit var engineManager: EngineManager
     @Inject lateinit var auditRepository: AuditRepository
+    @Inject lateinit var tradingRepository: TradingRepository
+    @Inject lateinit var userDataStreamManager: UserDataStreamManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var wakeLock: PowerManager.WakeLock? = null
@@ -79,10 +82,35 @@ class TradingForegroundService : Service() {
         isRunning = true
 
         startForeground(NOTIFICATION_ID, buildNotification("Trading Bot Active"))
-        acquireWakeLock()
+        try {
+            acquireWakeLock()
+        } catch (e: Exception) {
+            // Wake lock failure means the CPU may sleep mid-monitor and miss
+            // SL/TP triggers. Surface this prominently rather than silently
+            // continuing in a degraded state.
+            Timber.e(e, "Failed to acquire WakeLock in startTrading() \u2014 monitoring may be unreliable")
+            notifyWakeLockFailure(e)
+        }
 
         // Start all engines (bot + alerts)
         engineManager.startAll()
+
+        // Open Binance user-data stream (executionReport / ORDER_TRADE_UPDATE)
+        // — enables real-time fill detection + listenKey keepalive every 30 min.
+        userDataStreamManager.start()
+
+        // Reconcile with Binance BEFORE the monitoring loop starts so any
+        // ghost orders / positions opened or closed off-app are detected and
+        // logged. Failure is non-fatal — the loop still runs against local DB.
+        serviceScope.launch {
+            try {
+                tradingRepository.reconcileWithBinance()
+                    .onFailure { Timber.w(it, "Startup reconcile with Binance failed") }
+                    .onSuccess { Timber.i("Startup reconcile with Binance complete") }
+            } catch (e: Exception) {
+                Timber.w(e, "Startup reconcile threw")
+            }
+        }
 
         // Local SL/TP monitoring loop - every 1 second
         serviceScope.launch {
@@ -134,6 +162,11 @@ class TradingForegroundService : Service() {
         serviceScope.launch {
             while (isActive) {
                 Timber.d("Heartbeat: Service running, positions monitored")
+                // Refresh wake lock so the 24h cap is reset well before expiry.
+                try { acquireWakeLock() } catch (e: Exception) {
+                    Timber.e(e, "wakeLock refresh failed — surfacing to user")
+                    notifyWakeLockFailure(e)
+                }
                 delay(60_000)
             }
         }
@@ -223,6 +256,7 @@ class TradingForegroundService : Service() {
         }
         isRunning = false
         engineManager.stopAll()
+        userDataStreamManager.stop()
         serviceScope.cancel()
         webSocketManager.disconnectAll()
         releaseWakeLock()
@@ -232,16 +266,75 @@ class TradingForegroundService : Service() {
     }
 
     private fun acquireWakeLock() {
+        // Re-acquire safely if a previous wake lock is still held.
+        wakeLock?.let { if (it.isHeld) it.release() }
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "TFG::TradingWakeLock"
-        ).apply { acquire(10 * 60 * 1000L) } // 10-minute timeout, re-acquired each cycle
+        ).apply {
+            setReferenceCounted(false)
+            // Hold without an aggressive 10-minute timeout (was causing the
+            // CPU to sleep mid-monitoring loop). The wake lock is released in
+            // stopTrading()/onDestroy() and re-acquired by the heartbeat below.
+            acquire(24 * 60 * 60 * 1000L) // 24h max — heartbeat refreshes it
+        }
     }
 
     private fun releaseWakeLock() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
+    }
+
+    /**
+     * Posts a high-importance user-visible notification when WakeLock acquisition
+     * fails. CPU may sleep mid-monitor loop, missing SL/TP triggers — the user
+     * needs to know the bot is operating in a degraded state.
+     */
+    private fun notifyWakeLockFailure(error: Throwable) {
+        try {
+            val channelId = "tfg_wakelock_failure"
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        channelId,
+                        "Trading System Alerts",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Critical alerts about the trading engine state"
+                    }
+                )
+            }
+            val notif = NotificationCompat.Builder(this, channelId)
+                .setContentTitle("Trading bot may be unreliable")
+                .setContentText("WakeLock failed: ${error.message ?: error.javaClass.simpleName}. CPU may sleep and miss SL/TP triggers.")
+                .setStyle(NotificationCompat.BigTextStyle().bigText(
+                    "WakeLock acquisition failed: ${error.message ?: error.javaClass.simpleName}.\n" +
+                    "The CPU may enter sleep state, causing the 1-second SL/TP monitoring loop " +
+                    "to pause. Open positions may not close at configured levels. " +
+                    "Consider stopping the bot until this is resolved."
+                ))
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(NOTIFICATION_ID + 1, notif)
+            // Also write an audit log entry so the failure is in the trail.
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    auditRepository.log(AuditLog(
+                        id = java.util.UUID.randomUUID().toString(),
+                        action = AuditAction.CONFIG_CHANGED,
+                        category = AuditCategory.SYSTEM,
+                        details = "WakeLock failure: ${error.message ?: error.javaClass.simpleName}",
+                        userId = "system"
+                    ))
+                } catch (_: Exception) { }
+            }
+        } catch (_: Exception) {
+            // Notification system itself broken — nothing more we can do.
+        }
     }
 
     private fun createNotificationChannel() {
@@ -272,7 +365,34 @@ class TradingForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Timber.w("Task removed - service continues in background")
+        // Some OEMs (Xiaomi/Huawei/etc.) kill foreground services tied to the
+        // task on swipe-away. Schedule a restart via AlarmManager so the
+        // 24/7 trading loop comes back automatically.
+        if (isRunning) {
+            try {
+                val restartIntent = Intent(applicationContext, TradingForegroundService::class.java).apply {
+                    action = ACTION_START
+                    setPackage(packageName)
+                }
+                val pendingIntent = android.app.PendingIntent.getForegroundService(
+                    applicationContext,
+                    1,
+                    restartIntent,
+                    android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                alarmManager.set(
+                    android.app.AlarmManager.ELAPSED_REALTIME,
+                    android.os.SystemClock.elapsedRealtime() + 1_000L,
+                    pendingIntent
+                )
+                Timber.w("Task removed - scheduled service restart in 1s")
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to schedule service restart on task removal")
+            }
+        } else {
+            Timber.w("Task removed - service not running, no restart needed")
+        }
     }
 
     override fun onDestroy() {

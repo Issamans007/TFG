@@ -77,11 +77,40 @@ class AuthRepositoryImpl @Inject constructor(
     }
 
     override suspend fun verifyTradingPin(pin: String): Result<Boolean> = runCatching {
+        // Brute-force protection: lock out for an exponentially-growing window
+        // after repeated wrong PIN attempts. State is persisted so a process
+        // restart cannot reset the counter.
+        val now = System.currentTimeMillis()
+        val lockedUntil = prefs.getLong(KEY_PIN_LOCKED_UNTIL, 0L)
+        if (lockedUntil > now) {
+            val remainingSec = (lockedUntil - now) / 1000
+            throw IllegalStateException("Too many wrong PIN attempts. Try again in ${remainingSec}s.")
+        }
         val stored = keystoreManager.getPin()
-        if (stored == pin) {
+        if (stored.isNotEmpty() && stored == pin) {
+            // Reset failure counter on success.
+            prefs.edit()
+                .putInt(KEY_PIN_FAILS, 0)
+                .putLong(KEY_PIN_LOCKED_UNTIL, 0L)
+                .apply()
             true
         } else {
-            throw IllegalArgumentException("Invalid PIN")
+            val fails = prefs.getInt(KEY_PIN_FAILS, 0) + 1
+            // 1–2 wrong: no lockout. 3–4: 30s. 5–6: 5 min. 7+: 1 hour.
+            val lockoutMs: Long = when {
+                fails >= 7 -> 60L * 60_000L
+                fails >= 5 -> 5L * 60_000L
+                fails >= 3 -> 30_000L
+                else -> 0L
+            }
+            prefs.edit()
+                .putInt(KEY_PIN_FAILS, fails)
+                .putLong(KEY_PIN_LOCKED_UNTIL, if (lockoutMs > 0) now + lockoutMs else 0L)
+                .apply()
+            throw IllegalArgumentException(
+                if (lockoutMs > 0) "Invalid PIN. Locked for ${lockoutMs / 1000}s after $fails wrong attempts."
+                else "Invalid PIN ($fails wrong attempts)."
+            )
         }
     }
 
@@ -92,8 +121,8 @@ class AuthRepositoryImpl @Inject constructor(
     }
 
     override suspend fun logout() {
+        keystoreManager.clearAuthToken()
         prefs.edit()
-            .remove(KEY_TOKEN)
             .remove(KEY_USER_ID)
             .remove(KEY_USER_EMAIL)
             .remove(KEY_USER_NAME)
@@ -107,8 +136,11 @@ class AuthRepositoryImpl @Inject constructor(
     override fun isLoggedIn(): Flow<Boolean> = currentUserFlow.map { it != null }
 
     private fun saveAuthState(token: String, user: User) {
+        // Token is bearer credentials — encrypt via Keystore rather than store
+        // it as plaintext in SharedPreferences (readable on rooted devices /
+        // by adb backup on debug builds).
+        keystoreManager.storeAuthToken(token)
         prefs.edit()
-            .putString(KEY_TOKEN, token)
             .putString(KEY_USER_ID, user.id)
             .putString(KEY_USER_EMAIL, user.email)
             .putString(KEY_USER_NAME, user.displayName)
@@ -135,7 +167,7 @@ class AuthRepositoryImpl @Inject constructor(
     }
 
     companion object {
-        private const val KEY_TOKEN = "auth_token"
+        private const val KEY_TOKEN = "auth_token" // legacy — cleared on first launch after upgrade
         private const val KEY_USER_ID = "auth_user_id"
         private const val KEY_USER_EMAIL = "auth_user_email"
         private const val KEY_USER_NAME = "auth_user_name"
@@ -143,5 +175,7 @@ class AuthRepositoryImpl @Inject constructor(
         private const val KEY_KYC_STATUS = "auth_kyc_status"
         private const val KEY_BIOMETRIC = "auth_biometric"
         private const val KEY_PIN_SET = "auth_pin_set"
+        private const val KEY_PIN_FAILS = "auth_pin_fails"
+        private const val KEY_PIN_LOCKED_UNTIL = "auth_pin_locked_until"
     }
 }

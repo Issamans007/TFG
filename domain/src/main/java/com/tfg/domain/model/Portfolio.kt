@@ -48,5 +48,14 @@ data class Position(
     val takeProfits: List<TakeProfit> = emptyList(),
     val stopLosses: List<StopLoss> = emptyList(),
     val orderId: String,
-    val openedAt: Long = System.currentTimeMillis()
+    val openedAt: Long = System.currentTimeMillis(),
+    // ── Futures-specific (defaults preserve spot semantics) ──
+    val marketType: MarketType = MarketType.SPOT,
+    val leverage: Int = 1,
+    val marginType: MarginType = MarginType.ISOLATED,
+    val positionSide: PositionSide = PositionSide.BOTH,
+    val liquidationPrice: Double = 0.0,
+    val markPrice: Double = 0.0,
+    val isolatedMargin: Double = 0.0,
+    val maintMargin: Double = 0.0
 )

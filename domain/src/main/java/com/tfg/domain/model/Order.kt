@@ -33,7 +33,14 @@ data class Order(
     val executedAt: Long? = null,
     val closedAt: Long? = null,
     val binanceOrderId: Long? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    // ── Futures-specific (backward-compatible; ignored for spot) ──
+    val marketType: MarketType = MarketType.SPOT,
+    val leverage: Int = 1,
+    val marginType: MarginType = MarginType.ISOLATED,
+    val positionSide: PositionSide = PositionSide.BOTH,
+    val reduceOnly: Boolean = false,
+    val closePosition: Boolean = false
 )
 
 data class ConditionalTrigger(
@@ -83,3 +90,12 @@ enum class OrderStatus {
 enum class ExecutionMode { MANUAL, BOT, SCRIPT, SIGNAL, PAPER, LIVE }
 
 enum class TimeInForce { GTC, IOC, FOK }
+
+/** Market type for the order. SPOT is default; FUTURES_USDM uses USDT-margined perps on fapi.binance.com. */
+enum class MarketType { SPOT, FUTURES_USDM }
+
+/** Margin model for futures positions. Ignored for spot. */
+enum class MarginType { ISOLATED, CROSSED }
+
+/** Position side. BOTH = one-way mode. LONG/SHORT = hedge mode. Spot orders always use BOTH. */
+enum class PositionSide { BOTH, LONG, SHORT }

@@ -222,12 +222,15 @@ private fun SettingsToggle(label: String, checked: Boolean, onToggle: (Boolean) 
 
 @Composable
 private fun RiskConfigSection(config: RiskConfig, onUpdate: (RiskConfig) -> Unit) {
-    var maxPositionPercent by remember { mutableStateOf(config.maxPositionSizePercent.toString()) }
-    var maxOpenTrades by remember { mutableStateOf(config.maxOpenTrades.toString()) }
-    var dailyLossLimit by remember { mutableStateOf(config.dailyLossLimitPercent.toString()) }
-    var maxLossPerTrade by remember { mutableStateOf(config.maxLossPerTradePercent.toString()) }
-    var drawdownPause by remember { mutableStateOf(config.drawdownPausePercent.toString()) }
-    var consecutiveLossLimit by remember { mutableStateOf(config.consecutiveLossLimit.toString()) }
+    // Key the local edit state to `config` so when the saved RiskConfig flow
+    // emits a new value (e.g. after Save, after kill-switch reset), the text
+    // fields refresh from disk instead of showing stale defaults.
+    var maxPositionPercent by remember(config) { mutableStateOf(config.maxPositionSizePercent.toString()) }
+    var maxOpenTrades by remember(config) { mutableStateOf(config.maxOpenTrades.toString()) }
+    var dailyLossLimit by remember(config) { mutableStateOf(config.dailyLossLimitPercent.toString()) }
+    var maxLossPerTrade by remember(config) { mutableStateOf(config.maxLossPerTradePercent.toString()) }
+    var drawdownPause by remember(config) { mutableStateOf(config.drawdownPausePercent.toString()) }
+    var consecutiveLossLimit by remember(config) { mutableStateOf(config.consecutiveLossLimit.toString()) }
 
     TfgCard(modifier = Modifier.padding(horizontal = 16.dp)) {
         RiskField("Max Position Size %", maxPositionPercent) { maxPositionPercent = it }

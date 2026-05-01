@@ -48,7 +48,16 @@ class PortfolioViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isRefreshing = true, error = null) }
             try {
+                // Await the refresh so subsequent Flow emissions reflect fresh
+                // data; previously we returned before refresh completed and the
+                // UI showed stale numbers until the next tick.
                 portfolioRepository.refreshPortfolio()
+                // Also pull one fresh snapshot synchronously so the UI updates
+                // immediately even if the underlying Flow hasn't re-emitted yet.
+                val fresh = try { portfolioRepository.getPortfolio().first() } catch (_: Exception) { null }
+                if (fresh != null) {
+                    _state.update { it.copy(portfolio = fresh) }
+                }
             } catch (e: Exception) {
                 _state.update { it.copy(error = "Refresh failed: ${e.message}") }
             } finally {

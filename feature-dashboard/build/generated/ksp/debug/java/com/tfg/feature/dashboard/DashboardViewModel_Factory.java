@@ -3,6 +3,7 @@ package com.tfg.feature.dashboard;
 import android.content.Context;
 import com.tfg.domain.repository.DonationRepository;
 import com.tfg.domain.repository.SignalRepository;
+import com.tfg.domain.service.ConsoleBus;
 import com.tfg.domain.usecase.analytics.GetAnalyticsUseCase;
 import com.tfg.domain.usecase.analytics.GetPortfolioUseCase;
 import com.tfg.engine.EngineManager;
@@ -38,24 +39,28 @@ public final class DashboardViewModel_Factory implements Factory<DashboardViewMo
 
   private final Provider<EngineManager> engineManagerProvider;
 
+  private final Provider<ConsoleBus> consoleBusProvider;
+
   private final Provider<Context> contextProvider;
 
   public DashboardViewModel_Factory(Provider<GetPortfolioUseCase> getPortfolioUseCaseProvider,
       Provider<GetAnalyticsUseCase> getAnalyticsUseCaseProvider,
       Provider<SignalRepository> signalRepositoryProvider,
       Provider<DonationRepository> donationRepositoryProvider,
-      Provider<EngineManager> engineManagerProvider, Provider<Context> contextProvider) {
+      Provider<EngineManager> engineManagerProvider, Provider<ConsoleBus> consoleBusProvider,
+      Provider<Context> contextProvider) {
     this.getPortfolioUseCaseProvider = getPortfolioUseCaseProvider;
     this.getAnalyticsUseCaseProvider = getAnalyticsUseCaseProvider;
     this.signalRepositoryProvider = signalRepositoryProvider;
     this.donationRepositoryProvider = donationRepositoryProvider;
     this.engineManagerProvider = engineManagerProvider;
+    this.consoleBusProvider = consoleBusProvider;
     this.contextProvider = contextProvider;
   }
 
   @Override
   public DashboardViewModel get() {
-    return newInstance(getPortfolioUseCaseProvider.get(), getAnalyticsUseCaseProvider.get(), signalRepositoryProvider.get(), donationRepositoryProvider.get(), engineManagerProvider.get(), contextProvider.get());
+    return newInstance(getPortfolioUseCaseProvider.get(), getAnalyticsUseCaseProvider.get(), signalRepositoryProvider.get(), donationRepositoryProvider.get(), engineManagerProvider.get(), consoleBusProvider.get(), contextProvider.get());
   }
 
   public static DashboardViewModel_Factory create(
@@ -63,13 +68,15 @@ public final class DashboardViewModel_Factory implements Factory<DashboardViewMo
       Provider<GetAnalyticsUseCase> getAnalyticsUseCaseProvider,
       Provider<SignalRepository> signalRepositoryProvider,
       Provider<DonationRepository> donationRepositoryProvider,
-      Provider<EngineManager> engineManagerProvider, Provider<Context> contextProvider) {
-    return new DashboardViewModel_Factory(getPortfolioUseCaseProvider, getAnalyticsUseCaseProvider, signalRepositoryProvider, donationRepositoryProvider, engineManagerProvider, contextProvider);
+      Provider<EngineManager> engineManagerProvider, Provider<ConsoleBus> consoleBusProvider,
+      Provider<Context> contextProvider) {
+    return new DashboardViewModel_Factory(getPortfolioUseCaseProvider, getAnalyticsUseCaseProvider, signalRepositoryProvider, donationRepositoryProvider, engineManagerProvider, consoleBusProvider, contextProvider);
   }
 
   public static DashboardViewModel newInstance(GetPortfolioUseCase getPortfolioUseCase,
       GetAnalyticsUseCase getAnalyticsUseCase, SignalRepository signalRepository,
-      DonationRepository donationRepository, EngineManager engineManager, Context context) {
-    return new DashboardViewModel(getPortfolioUseCase, getAnalyticsUseCase, signalRepository, donationRepository, engineManager, context);
+      DonationRepository donationRepository, EngineManager engineManager, ConsoleBus consoleBus,
+      Context context) {
+    return new DashboardViewModel(getPortfolioUseCase, getAnalyticsUseCase, signalRepository, donationRepository, engineManager, consoleBus, context);
   }
 }

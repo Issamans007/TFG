@@ -8,6 +8,8 @@ import com.tfg.domain.usecase.analytics.GetAnalyticsUseCase
 import com.tfg.domain.usecase.analytics.GetPortfolioUseCase
 import com.tfg.domain.repository.DonationRepository
 import com.tfg.domain.repository.SignalRepository
+import com.tfg.domain.service.ConsoleBus
+import com.tfg.domain.service.ConsoleEvent
 import com.tfg.engine.EngineManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -27,7 +29,8 @@ data class DashboardUiState(
     val cardConfigs: List<DashboardCardConfig> = DashboardCardType.entries.mapIndexed { i, type ->
         DashboardCardConfig(type = type, visible = true, order = i)
     },
-    val isCustomizing: Boolean = false
+    val isCustomizing: Boolean = false,
+    val recentConsoleEvents: List<ConsoleEvent> = emptyList()
 )
 
 @HiltViewModel
@@ -37,6 +40,7 @@ class DashboardViewModel @Inject constructor(
     private val signalRepository: SignalRepository,
     private val donationRepository: DonationRepository,
     private val engineManager: EngineManager,
+    private val consoleBus: ConsoleBus,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -52,6 +56,19 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             engineManager.hasActiveEngine.collect { active ->
                 _state.update { it.copy(botActive = active) }
+            }
+        }
+        // Observe live console events for the dashboard preview card.
+        viewModelScope.launch {
+            // Seed with the bus replay cache so we don't show empty until the
+            // next event arrives. The collector below dedupes by id so the
+            // SharedFlow's own replay can't produce duplicate entries.
+            _state.update { it.copy(recentConsoleEvents = consoleBus.snapshot().reversed().take(5)) }
+            consoleBus.events.collect { ev ->
+                _state.update { s ->
+                    if (s.recentConsoleEvents.any { it.id == ev.id }) s
+                    else s.copy(recentConsoleEvents = (listOf(ev) + s.recentConsoleEvents).take(5))
+                }
             }
         }
     }
@@ -95,7 +112,17 @@ class DashboardViewModel @Inject constructor(
             // Fallback timeout
             launch {
                 kotlinx.coroutines.delay(10_000)
-                if (_state.value.isLoading) _state.update { it.copy(isLoading = false) }
+                // Atomic check-and-set: by the time the body of update {} runs,
+                // a successful flow emission may already have set isLoading=false.
+                // Only stamp the timeout error if loading is still in progress.
+                _state.update { s ->
+                    if (s.isLoading) {
+                        s.copy(
+                            isLoading = false,
+                            error = "Couldn't load dashboard. Pull to refresh."
+                        )
+                    } else s
+                }
             }
         }
 

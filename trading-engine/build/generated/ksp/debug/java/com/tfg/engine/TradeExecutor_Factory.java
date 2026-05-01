@@ -3,6 +3,7 @@ package com.tfg.engine;
 import android.content.Context;
 import com.tfg.data.local.dao.OrderDao;
 import com.tfg.data.remote.api.BinanceApi;
+import com.tfg.data.remote.websocket.WebSocketManager;
 import com.tfg.domain.repository.TradingRepository;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.Factory;
@@ -34,31 +35,37 @@ public final class TradeExecutor_Factory implements Factory<TradeExecutor> {
 
   private final Provider<BinanceApi> binanceApiProvider;
 
+  private final Provider<WebSocketManager> webSocketManagerProvider;
+
   private final Provider<Context> contextProvider;
 
   public TradeExecutor_Factory(Provider<TradingRepository> tradingRepositoryProvider,
       Provider<OrderDao> orderDaoProvider, Provider<RiskEngine> riskEngineProvider,
-      Provider<BinanceApi> binanceApiProvider, Provider<Context> contextProvider) {
+      Provider<BinanceApi> binanceApiProvider, Provider<WebSocketManager> webSocketManagerProvider,
+      Provider<Context> contextProvider) {
     this.tradingRepositoryProvider = tradingRepositoryProvider;
     this.orderDaoProvider = orderDaoProvider;
     this.riskEngineProvider = riskEngineProvider;
     this.binanceApiProvider = binanceApiProvider;
+    this.webSocketManagerProvider = webSocketManagerProvider;
     this.contextProvider = contextProvider;
   }
 
   @Override
   public TradeExecutor get() {
-    return newInstance(tradingRepositoryProvider.get(), orderDaoProvider.get(), riskEngineProvider.get(), binanceApiProvider.get(), contextProvider.get());
+    return newInstance(tradingRepositoryProvider.get(), orderDaoProvider.get(), riskEngineProvider.get(), binanceApiProvider.get(), webSocketManagerProvider.get(), contextProvider.get());
   }
 
   public static TradeExecutor_Factory create(Provider<TradingRepository> tradingRepositoryProvider,
       Provider<OrderDao> orderDaoProvider, Provider<RiskEngine> riskEngineProvider,
-      Provider<BinanceApi> binanceApiProvider, Provider<Context> contextProvider) {
-    return new TradeExecutor_Factory(tradingRepositoryProvider, orderDaoProvider, riskEngineProvider, binanceApiProvider, contextProvider);
+      Provider<BinanceApi> binanceApiProvider, Provider<WebSocketManager> webSocketManagerProvider,
+      Provider<Context> contextProvider) {
+    return new TradeExecutor_Factory(tradingRepositoryProvider, orderDaoProvider, riskEngineProvider, binanceApiProvider, webSocketManagerProvider, contextProvider);
   }
 
   public static TradeExecutor newInstance(TradingRepository tradingRepository, OrderDao orderDao,
-      RiskEngine riskEngine, BinanceApi binanceApi, Context context) {
-    return new TradeExecutor(tradingRepository, orderDao, riskEngine, binanceApi, context);
+      RiskEngine riskEngine, BinanceApi binanceApi, WebSocketManager webSocketManager,
+      Context context) {
+    return new TradeExecutor(tradingRepository, orderDao, riskEngine, binanceApi, webSocketManager, context);
   }
 }

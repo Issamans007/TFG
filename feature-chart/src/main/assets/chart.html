@@ -15,18 +15,36 @@ body{background:#0D1117;overflow:hidden;font-family:-apple-system,BlinkMacSystem
 .toolbar{position:fixed;top:48px;left:0;right:0;z-index:9999;display:flex;gap:4px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:6px 8px;background:rgba(22,27,34,0.95);border-bottom:1px solid #30363D;border-radius:0 0 10px 10px;}
 .toolbar .drag-handle{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:24px;cursor:grab;touch-action:none;color:#58A6FF;font-size:16px;padding:0 2px;user-select:none;-webkit-user-select:none;}
 .toolbar .drag-handle:active{cursor:grabbing;}
-.toolbar button{background:#1C2333;border:1px solid #30363D;color:#8B949E;font-size:10px;padding:4px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;flex-shrink:0;}
-.toolbar button.active{background:#58A6FF33;color:#58A6FF;border-color:#58A6FF55;}
+.toolbar button{background:#1C2333;border:1px solid #30363D;color:#8B949E;font-size:11px;padding:8px 10px;min-width:44px;min-height:36px;border-radius:6px;cursor:pointer;white-space:nowrap;flex-shrink:0;}
+.toolbar button.active{background:#58A6FF33;color:#58A6FF;border-color:#58A6FF;box-shadow:0 0 0 1px #58A6FF inset;}
 .toolbar button:hover{background:#30363D;}
 .sel-actions{display:none;flex-shrink:0;gap:4px;align-items:center;}
 .sel-actions.visible{display:flex;}
 .sel-info{color:#58A6FF;font-size:10px;white-space:nowrap;}
+#drawing-hint{position:fixed;left:50%;transform:translateX(-50%);top:96px;z-index:10000;background:rgba(88,166,255,0.95);color:#0D1117;font-size:11px;font-weight:600;padding:6px 14px;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,0.4);display:none;pointer-events:none;max-width:90%;text-align:center;}
+
+/* ── Strategy Dashboard Overlay ── */
+#strat-dashboard{position:absolute;z-index:9998;display:none;min-width:180px;max-width:320px;background:rgba(22,27,34,0.92);border:1px solid #30363D;border-radius:10px;color:#E6EDF3;font-size:10px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.5);touch-action:none;user-select:none;-webkit-user-select:none;}
+#strat-dashboard .sd-header{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;cursor:grab;background:#161B22;border-bottom:1px solid #30363D;}
+#strat-dashboard .sd-header:active{cursor:grabbing;}
+#strat-dashboard .sd-title{font-weight:600;font-size:11px;color:#58A6FF;}
+#strat-dashboard .sd-badge{padding:1px 6px;border-radius:4px;font-weight:600;font-size:9px;}
+#strat-dashboard .sd-body{padding:4px 6px;max-height:300px;overflow-y:auto;}
+#strat-dashboard .sd-row{display:flex;align-items:center;padding:2px 0;border-bottom:1px solid #1C233355;}
+#strat-dashboard .sd-row .sd-label{flex:1.4;color:#8B949E;}
+#strat-dashboard .sd-row .sd-icon{flex:0.3;text-align:center;font-weight:700;}
+#strat-dashboard .sd-row .sd-val{flex:1.2;}
+#strat-dashboard .sd-footer{padding:4px 6px;border-top:1px solid #30363D;display:flex;justify-content:space-between;align-items:center;}
+#strat-dashboard .sd-resize{position:absolute;bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize;opacity:0.4;display:flex;align-items:center;justify-content:center;font-size:8px;color:#8B949E;}
+#strat-dashboard .sd-close{cursor:pointer;color:#8B949E;font-size:14px;padding:0 2px;line-height:1;}
+#strat-dashboard .sd-close:hover{color:#FF5252;}
 #crosshair-info{position:absolute;top:8px;right:8px;z-index:10;background:#161B22EE;border:1px solid #30363D;border-radius:8px;padding:8px;color:#E6EDF3;font-size:11px;display:none;}
 #crosshair-info .row{display:flex;gap:8px;margin:2px 0;}
 #crosshair-info .o{color:#26A69A;} #crosshair-info .h{color:#00C853;} #crosshair-info .l{color:#EF5350;} #crosshair-info .c{color:#58A6FF;}
 </style>
 </head>
 <body>
+<div id="drawing-hint"></div>
 <div id="chart-container">
   <div id="legend"></div>
   <div id="crosshair-info">
@@ -59,6 +77,14 @@ body{background:#0D1117;overflow:hidden;font-family:-apple-system,BlinkMacSystem
     <button onclick="undoDrawing()" style="color:#FFD700;">↩ Undo</button>
     <button onclick="clearDrawings()" style="color:#EF5350;">✕ Clear</button>
     <input type="color" id="drawing-color" value="#58A6FF" style="width:28px;height:24px;border:none;background:none;cursor:pointer;flex-shrink:0;" title="Color">
+    <select id="drawing-width" style="background:#161B22;color:#C9D1D9;border:1px solid #30363D;border-radius:4px;padding:2px;" title="Line Width">
+      <option value="1">1px</option>
+      <option value="2" selected>2px</option>
+      <option value="3">3px</option>
+      <option value="4">4px</option>
+    </select>
+    <button onclick="toggleDrawingsVisibility()" id="btn-toggle-vis" title="Show/Hide Drawings">👁</button>
+    <button onclick="duplicateSelectedDrawing()" style="color:#26A69A;" title="Duplicate (Ctrl+D)">⧉</button>
     <button onclick="setDrawingMode(null)" style="color:#26A69A;">✓ Done</button>
     <span class="sel-actions" id="sel-actions">
       <span class="sel-info" id="sel-info"></span>
@@ -66,6 +92,19 @@ body{background:#0D1117;overflow:hidden;font-family:-apple-system,BlinkMacSystem
       <button onclick="deleteSelectedDrawing()" style="color:#EF5350;">🗑 Del</button>
       <button onclick="deselectDrawing()" style="color:#8B949E;">✕</button>
     </span>
+  </div>
+  <!-- Strategy Dashboard Overlay (draggable & resizable) -->
+  <div id="strat-dashboard">
+    <div class="sd-header" id="sd-drag-handle">
+      <span class="sd-title" id="sd-title">Dashboard</span>
+      <span>
+        <span class="sd-badge" id="sd-badge"></span>
+        <span class="sd-close" id="sd-close" onclick="hideDashboard()">✕</span>
+      </span>
+    </div>
+    <div class="sd-body" id="sd-body"></div>
+    <div class="sd-footer" id="sd-footer"></div>
+    <div class="sd-resize" id="sd-resize">◢</div>
   </div>
 </div>
 
@@ -88,6 +127,59 @@ function getDrawColor() {
   var el = document.getElementById('drawing-color');
   return el ? el.value : '#58A6FF';
 }
+
+function getDrawWidth() {
+  var el = document.getElementById('drawing-width');
+  var w = el ? parseInt(el.value, 10) : 2;
+  return isNaN(w) ? 2 : w;
+}
+
+let drawingsHidden = false;
+function toggleDrawingsVisibility() {
+  drawingsHidden = !drawingsHidden;
+  drawings.forEach(function(d) {
+    if (!d || !d.obj) return;
+    var arr = Array.isArray(d.obj) ? d.obj : [d.obj];
+    arr.forEach(function(o) {
+      if (o && typeof o.applyOptions === 'function') {
+        try { o.applyOptions({ visible: !drawingsHidden }); } catch(e) {}
+      }
+    });
+  });
+  var btn = document.getElementById('btn-toggle-vis');
+  if (btn) btn.style.opacity = drawingsHidden ? '0.4' : '1';
+}
+
+function duplicateSelectedDrawing() {
+  if (selectedDrawingIdx < 0 || selectedDrawingIdx >= drawings.length) return;
+  var src = drawings[selectedDrawingIdx];
+  if (!src || !src.type) return;
+  var dt = (storedCandleData.length > 1)
+    ? (storedCandleData[storedCandleData.length-1].time - storedCandleData[storedCandleData.length-2].time) * 3
+    : 60;
+  try {
+    if (src.type === 'hline' && src.price !== undefined) {
+      addHorizontalLine(src.price * 1.001, src.color || getDrawColor());
+    } else if (src.type === 'trendline' && src.t1 !== undefined) {
+      addTrendLine(src.t1 + dt, src.p1, src.t2 + dt, src.p2, src.color || getDrawColor());
+    } else if (src.type === 'rect' && src.t1 !== undefined) {
+      addRectangle(src.t1 + dt, src.p1, src.t2 + dt, src.p2, src.color || getDrawColor());
+    } else if (src.type === 'fib' && src.p1 !== undefined && src.p2 !== undefined) {
+      addFibRetracement(src.p1 * 1.001, src.p2 * 1.001, src.color || getDrawColor());
+    }
+    if (typeof _saveDrawingsForSymbol === 'function') _saveDrawingsForSymbol(_currentSymbol);
+  } catch(e) { console.warn('duplicate failed', e); }
+}
+
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'd') {
+    if (selectedDrawingIdx >= 0) { e.preventDefault(); duplicateSelectedDrawing(); }
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (selectedDrawingIdx >= 0 && typeof deleteSelectedDrawing === 'function') {
+      deleteSelectedDrawing();
+    }
+  }
+});
 
 // ─── Chart Creation ─────────────────────────────────────────────────
 function initChart() {
@@ -328,14 +420,28 @@ function setCandles(json) {
 function setMarkers(json) {
   console.log('[chart] setMarkers called');
   const data = JSON.parse(json);
-  markers = data.map(m => ({
-    time: m.t,
-    position: m.type === 'BUY' ? 'belowBar' : 'aboveBar',
-    color: m.type === 'BUY' ? '#00C853' : m.type === 'SELL' ? '#FF1744' : '#F0883E',
-    shape: m.type === 'BUY' ? 'arrowUp' : m.type === 'SELL' ? 'arrowDown' : 'circle',
-    text: m.type,
-  }));
-  candleSeries.setMarkers(markers);
+  markers = data.map(m => {
+    var t = m.type || '';
+    var lbl = m.label ? (t + ' ' + m.label) : t;
+    var info = _markerStyle(t);
+    if (m.orderType && m.orderType !== 'MARKET') lbl += ' [' + m.orderType + ']';
+    return { time: m.t, position: info.pos, color: info.color, shape: info.shape, text: lbl };
+  });
+  rebuildMarkers();
+}
+
+/** Unified marker style lookup for all signal types. */
+function _markerStyle(type) {
+  switch ((type||'').toUpperCase()) {
+    case 'BUY':       return { pos:'belowBar', color:'#00C853', shape:'arrowUp' };
+    case 'PAT_BUY':   return { pos:'belowBar', color:'#00E5FF', shape:'arrowUp' };
+    case 'SELL':      return { pos:'aboveBar', color:'#FF1744', shape:'arrowDown' };
+    case 'PAT_SELL':  return { pos:'aboveBar', color:'#FF6D00', shape:'arrowDown' };
+    case 'TP_HIT':    return { pos:'aboveBar', color:'#00E676', shape:'circle' };
+    case 'SL_HIT':    return { pos:'aboveBar', color:'#FF5252', shape:'square' };
+    case 'CLOSE':     return { pos:'aboveBar', color:'#F0883E', shape:'circle' };
+    default:          return { pos:'belowBar', color:'#8B949E', shape:'circle' };
+  }
 }
 
 // ─── Overlay Indicators ─────────────────────────────────────────────
@@ -510,6 +616,38 @@ function removeSubIndicator(name) {
 function showDrawingToolbar(show) {
   console.log('[chart] showDrawingToolbar:', show);
   document.getElementById('drawing-toolbar').style.display = show ? 'flex' : 'none';
+  if (!show) { setDrawingHint(null); }
+}
+
+function setDrawingHint(text) {
+  var el = document.getElementById('drawing-hint');
+  if (!el) return;
+  if (text) { el.textContent = text; el.style.display = 'block'; }
+  else { el.style.display = 'none'; el.textContent = ''; }
+}
+
+function getDrawingHintText(mode, step) {
+  switch (mode) {
+    case 'hline': return 'Tap a price level for the horizontal line';
+    case 'vline': return 'Tap a bar for the vertical line';
+    case 'hray': return 'Tap start point for the horizontal ray';
+    case 'avwap': return 'Tap an anchor bar for VWAP';
+    case 'alert': return 'Tap a price to set an alert';
+    case 'text': return 'Tap to place text label';
+    case 'channel':
+      if (step === 0) return 'Channel: tap first point of main line';
+      if (step === 1) return 'Channel: tap second point of main line';
+      return 'Channel: tap to set width';
+    case 'trendline': return step === 0 ? 'Trend: tap first point' : 'Trend: tap second point';
+    case 'ray':       return step === 0 ? 'Ray: tap start' : 'Ray: tap direction point';
+    case 'extline':   return step === 0 ? 'Extended line: tap first point' : 'Extended line: tap second point';
+    case 'rect':      return step === 0 ? 'Rectangle: tap first corner' : 'Rectangle: tap opposite corner';
+    case 'range':     return step === 0 ? 'Range: tap first point' : 'Range: tap second point';
+    case 'fib':       return step === 0 ? 'Fib: tap swing low/high' : 'Fib: tap opposite swing';
+    case 'fibext':    return step === 0 ? 'Fib ext: tap first point' : 'Fib ext: tap second point';
+    case 'measure':   return step === 0 ? 'Measure: tap start' : 'Measure: tap end';
+    default: return null;
+  }
 }
 
 function setDrawingMode(mode) {
@@ -521,6 +659,9 @@ function setDrawingMode(mode) {
   if (mode) {
     const btn = document.getElementById('btn-' + mode);
     if (btn) btn.classList.add('active');
+    setDrawingHint(getDrawingHintText(mode, 0));
+  } else {
+    setDrawingHint(null);
   }
 }
 
@@ -529,32 +670,41 @@ function handleDrawingClick(time, price, point) {
   if (drawingMode === 'hline') {
     addHorizontalLine(price, col);
     drawingMode = null;
+    setDrawingHint(null);
   } else if (drawingMode === 'vline') {
     addVerticalLine(time, col);
     drawingMode = null;
+    setDrawingHint(null);
   } else if (drawingMode === 'hray') {
     addHorizontalRay(time, price, col);
     drawingMode = null;
+    setDrawingHint(null);
   } else if (drawingMode === 'avwap') {
     addAnchoredVWAP(time, col);
     drawingMode = null;
+    setDrawingHint(null);
   } else if (drawingMode === 'alert') {
     addPriceAlertLine(price, col);
     drawingMode = null;
+    setDrawingHint(null);
   } else if (drawingMode === 'channel') {
     // 3-click: first two define main line, third defines channel width
     if (!drawStart) {
       drawStart = { time, price, point };
+      setDrawingHint(getDrawingHintText('channel', 1));
     } else if (!drawMidPoint) {
       drawMidPoint = { time, price, point };
+      setDrawingHint(getDrawingHintText('channel', 2));
     } else {
       addParallelChannel(drawStart.time, drawStart.price, drawMidPoint.time, drawMidPoint.price, price, col);
       drawStart = null; drawMidPoint = null; drawingMode = null;
       document.querySelectorAll('.toolbar button').forEach(b => b.classList.remove('active'));
+      setDrawingHint(null);
     }
   } else if (drawingMode === 'trendline' || drawingMode === 'fib' || drawingMode === 'rect' || drawingMode === 'range' || drawingMode === 'ray' || drawingMode === 'extline' || drawingMode === 'fibext' || drawingMode === 'measure') {
     if (!drawStart) {
       drawStart = { time, price, point };
+      setDrawingHint(getDrawingHintText(drawingMode, 1));
     } else {
       if (drawingMode === 'trendline') addTrendLine(drawStart.time, drawStart.price, time, price, col);
       else if (drawingMode === 'fib') addFibRetracement(drawStart.price, price, col);
@@ -567,11 +717,13 @@ function handleDrawingClick(time, price, point) {
       drawStart = null;
       drawingMode = null;
       document.querySelectorAll('.toolbar button').forEach(b => b.classList.remove('active'));
+      setDrawingHint(null);
     }
   } else if (drawingMode === 'text') {
     const text = prompt('Enter text:');
     if (text) addTextLabel(time, price, text);
     drawingMode = null;
+    setDrawingHint(null);
   }
 }
 
@@ -579,7 +731,7 @@ function addHorizontalLine(price, col) {
   const line = candleSeries.createPriceLine({
     price: price,
     color: col || '#58A6FF',
-    lineWidth: 1,
+    lineWidth: getDrawWidth(),
     lineStyle: 2,
     axisLabelVisible: true,
     title: fmtP(price),
@@ -590,7 +742,7 @@ function addHorizontalLine(price, col) {
 
 function addTrendLine(t1, p1, t2, p2, col) {
   var s = chart.addLineSeries({
-    color: col || '#BC8CFF', lineWidth: 1, lineStyle: 2,
+    color: col || '#BC8CFF', lineWidth: getDrawWidth(), lineStyle: 2,
     lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
     pointMarkersVisible: true, autoscaleInfoProvider: () => null,
   });
@@ -601,7 +753,7 @@ function addTrendLine(t1, p1, t2, p2, col) {
 
 function addRay(t1, p1, t2, p2, col) {
   var s = chart.addLineSeries({
-    color: col || '#BC8CFF', lineWidth: 1, lineStyle: 2,
+    color: col || '#BC8CFF', lineWidth: getDrawWidth(), lineStyle: 2,
     lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
     autoscaleInfoProvider: () => null,
   });
@@ -706,8 +858,8 @@ function addFibRetracement(highPrice, lowPrice, col) {
       title: (lvl * 100).toFixed(1) + '%',
     });
     fibLines.push(line);
-    drawings.push({ type: 'fib', obj: line });
   });
+  drawings.push({ type: 'fib', obj: fibLines, p1: highPrice, p2: lowPrice, color: col || null });
   notifyDrawingAdded('fib', { highPrice: hi, lowPrice: lo });
 }
 
@@ -717,6 +869,7 @@ function addFibExtension(price1, price2, col) {
   var colors = ['#8B949E','#FF9800','#FFD700','#2196F3','#E040FB'];
   var range = Math.abs(price2 - price1);
   var basePrice = Math.min(price1, price2);
+  var extLines = [];
   levels.forEach(function(lvl, i) {
     var price = basePrice + range * lvl;
     var line = candleSeries.createPriceLine({
@@ -727,8 +880,9 @@ function addFibExtension(price1, price2, col) {
       axisLabelVisible: true,
       title: (lvl * 100).toFixed(1) + '%',
     });
-    drawings.push({ type: 'fibext', obj: line });
+    extLines.push(line);
   });
+  drawings.push({ type: 'fibext', obj: extLines, p1: price1, p2: price2, color: col || null });
   notifyDrawingAdded('fibext', { price1, price2 });
 }
 
@@ -761,7 +915,7 @@ function addAnchoredVWAP(anchorTime, col) {
     autoscaleInfoProvider: () => null,
   });
   s.setData(vwapData);
-  drawings.push({ type: 'avwap', series: s, anchorTime: anchorTime, color: col || '#E040FB' });
+  drawings.push({ type: 'avwap', series: s, anchorTime: anchorTime, time: anchorTime, color: col || '#E040FB' });
   notifyDrawingAdded('avwap', { anchorTime });
 }
 
@@ -825,7 +979,7 @@ function addRectangle(t1, p1, t2, p2, col) {
   const bottom = Math.min(p1, p2);
   const l1 = candleSeries.createPriceLine({ price: top, color: (col || '#58A6FF') + '70', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
   const l2 = candleSeries.createPriceLine({ price: bottom, color: (col || '#58A6FF') + '70', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
-  drawings.push({ type: 'rect', obj: [l1, l2], pTop: top, pBottom: bottom, color: col || '#58A6FF' });
+  drawings.push({ type: 'rect', obj: [l1, l2], t1: t1, t2: t2, p1: p1, p2: p2, pTop: top, pBottom: bottom, color: col || '#58A6FF' });
   notifyDrawingAdded('rect', { t1, p1: top, t2, p2: bottom });
 }
 
@@ -838,7 +992,7 @@ function addPriceRange(t1, p1, t2, p2, col) {
     price: mid, color: col || color, lineWidth: 1, lineStyle: 2,
     axisLabelVisible: true, title: (diff >= 0 ? '+' : '') + pct + '%  (' + fmtP(Math.abs(diff)) + ')',
   });
-  drawings.push({ type: 'range', obj: line, price: mid, p1: p1, p2: p2, color: col || color });
+  drawings.push({ type: 'range', obj: line, price: mid, t1: t1, t2: t2, p1: p1, p2: p2, color: col || color });
   notifyDrawingAdded('range', { p1, p2, diff, pct });
 }
 
@@ -863,9 +1017,98 @@ function clearDrawings() {
   console.log('[chart] clearDrawings');
   drawings.forEach(function(d) { removeDrawingObj(d); });
   drawings = [];
+  selectedDrawingIdx = -1;
   // Restore only signal markers (remove text/vline/measure labels)
   markers = markers.filter(m => m.text === 'BUY' || m.text === 'SELL' || m.text === 'CLOSE');
   candleSeries.setMarkers(markers);
+}
+
+// ─── Per-symbol drawing persistence ────────────────────────────────
+let _currentSymbol = null;
+
+function _serializeDrawings() {
+  // Strip runtime references; keep only plain data needed to recreate
+  return drawings.map(function(d) {
+    var o = { type: d.type, color: d.color };
+    if (d.price !== undefined) o.price = d.price;
+    if (d.time !== undefined) o.time = d.time;
+    if (d.t1 !== undefined) { o.t1 = d.t1; o.p1 = d.p1; o.t2 = d.t2; o.p2 = d.p2; }
+    if (d.t3 !== undefined) { o.t3 = d.t3; o.p3 = d.p3; }
+    if (d.offset !== undefined) o.p3 = d.p1 + d.offset;
+    if (d.text !== undefined) o.text = d.text;
+    if (d.top !== undefined) { o.top = d.top; o.bottom = d.bottom; }
+    return o;
+  });
+}
+
+function _deserializeDrawings(arr) {
+  if (!Array.isArray(arr)) return;
+  arr.forEach(function(d) {
+    try {
+      var col = d.color;
+      switch (d.type) {
+        case 'hline':    addHorizontalLine(d.price, col); break;
+        case 'vline':    addVerticalLine(d.time, col); break;
+        case 'hray':     addHorizontalRay(d.time, d.price, col); break;
+        case 'avwap':    addAnchoredVWAP(d.time, col); break;
+        case 'alert':    addPriceAlertLine(d.price, col); break;
+        case 'trendline':addTrendLine(d.t1, d.p1, d.t2, d.p2, col); break;
+        case 'ray':      addRay(d.t1, d.p1, d.t2, d.p2, col); break;
+        case 'extline':  addExtendedLine(d.t1, d.p1, d.t2, d.p2, col); break;
+        case 'fib':      addFibRetracement(d.p1, d.p2, col); break;
+        case 'fibext':   addFibExtension(d.p1, d.p2, col); break;
+        case 'rect':     addRectangle(d.t1, d.p1, d.t2, d.p2, col); break;
+        case 'range':    addPriceRange(d.t1, d.p1, d.t2, d.p2, col); break;
+        case 'channel':  if (d.p3 !== undefined) addParallelChannel(d.t1, d.p1, d.t2, d.p2, d.p3, col); break;
+        case 'measure':  addMeasureTool(d.t1, d.p1, d.t2, d.p2); break;
+        case 'text':     if (d.text) addTextLabel(d.time, d.price, d.text); break;
+      }
+    } catch (e) { console.warn('[chart] deserialize drawing failed', d.type, e); }
+  });
+}
+
+function _saveDrawingsForSymbol(sym) {
+  if (!sym) return;
+  try {
+    var data = _serializeDrawings();
+    if (data.length === 0) {
+      localStorage.removeItem('tfg_drawings_' + sym);
+    } else {
+      localStorage.setItem('tfg_drawings_' + sym, JSON.stringify(data));
+    }
+  } catch (e) { console.warn('[chart] save drawings failed', e); }
+}
+
+function _loadDrawingsForSymbol(sym) {
+  if (!sym) return;
+  try {
+    var raw = localStorage.getItem('tfg_drawings_' + sym);
+    if (!raw) return;
+    var arr = JSON.parse(raw);
+    _deserializeDrawings(arr);
+  } catch (e) { console.warn('[chart] load drawings failed', e); }
+}
+
+/**
+ * Switch the active symbol. Persists current symbol's drawings, clears them,
+ * then restores any saved drawings for the new symbol. Call BEFORE setCandles().
+ */
+function setSymbol(symbol) {
+  console.log('[chart] setSymbol:', symbol, 'prev:', _currentSymbol);
+  if (!symbol) return;
+  if (_currentSymbol === symbol) return;
+  if (_currentSymbol) _saveDrawingsForSymbol(_currentSymbol);
+  // Clear runtime drawing state (without touching signal markers persistence rules)
+  clearDrawings();
+  // Cancel any in-progress drawing
+  drawingMode = null;
+  drawStart = null;
+  drawMidPoint = null;
+  selectedDrawingIdx = -1;
+  moveMode = false;
+  document.querySelectorAll('.toolbar button').forEach(function(b) { b.classList.remove('active'); });
+  _currentSymbol = symbol;
+  _loadDrawingsForSymbol(symbol);
 }
 
 function undoDrawing() {
@@ -884,7 +1127,8 @@ function removeDrawingObj(d) {
   } else if (d.type === 'trendline' || d.type === 'ray' || d.type === 'extline' || d.type === 'hray' || d.type === 'avwap' || d.type === 'measure') {
     try { chart.removeSeries(d.series); } catch(e) {}
   } else if (d.type === 'fib' || d.type === 'fibext') {
-    try { candleSeries.removePriceLine(d.obj); } catch(e) {}
+    var lines = Array.isArray(d.obj) ? d.obj : [d.obj];
+    lines.forEach(function(l) { try { candleSeries.removePriceLine(l); } catch(e) {} });
   } else if (d.type === 'rect') {
     (d.obj || []).forEach(function(l) { try { candleSeries.removePriceLine(l); } catch(e) {} });
   } else if (d.type === 'channel') {
@@ -945,8 +1189,9 @@ function findNearestDrawing(time, price) {
       var d2 = pointToLineDistance(time, price, d.t1, d.p1 + d.offset, d.t2, d.p2 + d.offset);
       dist = Math.min(d1, d2);
     } else if (d.type === 'fib' || d.type === 'fibext') {
-      var lp = d.obj ? (d.obj.options ? d.obj.options().price : 0) : 0;
-      dist = Math.abs(price - lp);
+      // distance to nearest fib level price
+      var hi = Math.max(d.p1, d.p2), lo = Math.min(d.p1, d.p2);
+      dist = Math.min(Math.abs(price - hi), Math.abs(price - lo));
     } else if (d.type === 'vline') {
       // time-based proximity
       var tDiff = Math.abs(time - d.time);
@@ -994,7 +1239,8 @@ function highlightDrawing(d, on) {
   } else if (d.type === 'channel') {
     (d.series || []).forEach(function(s) { try { s.applyOptions({ lineWidth: on ? 3 : 1 }); } catch(e) {} });
   } else if (d.type === 'fib' || d.type === 'fibext') {
-    try { d.obj.applyOptions({ lineWidth: on ? 3 : 1 }); } catch(e) {}
+    var lines = Array.isArray(d.obj) ? d.obj : [d.obj];
+    lines.forEach(function(l) { try { l.applyOptions({ lineWidth: on ? 3 : 1 }); } catch(e) {} });
   } else if (d.type === 'rect') {
     (d.obj || []).forEach(function(l) { try { l.applyOptions({ lineWidth: on ? 3 : 1 }); } catch(e) {} });
   }
@@ -1493,6 +1739,106 @@ function fmtVol(v) {
   document.addEventListener('touchend', onEnd);
   document.addEventListener('mouseup', onEnd);
 })();
+
+// ─── Strategy Dashboard Overlay (draggable + resizable) ─────────────
+(function() {
+  var panel = document.getElementById('strat-dashboard');
+  var handle = document.getElementById('sd-drag-handle');
+  var resizer = document.getElementById('sd-resize');
+  var isDragging = false, isResizing = false;
+  var startX, startY, startLeft, startTop, startW, startH;
+
+  // Load saved position/size
+  try {
+    var saved = JSON.parse(localStorage.getItem('sd_pos'));
+    if (saved) { panel.style.left = saved.l; panel.style.top = saved.t; if (saved.w) panel.style.width = saved.w; }
+  } catch(e){}
+
+  function savePos() {
+    try { localStorage.setItem('sd_pos', JSON.stringify({l:panel.style.left, t:panel.style.top, w:panel.style.width})); } catch(e){}
+  }
+  function getXY(e) { var t = e.touches ? e.touches[0] : e; return {x:t.clientX, y:t.clientY}; }
+
+  // Drag
+  handle.addEventListener('mousedown', dragStart); handle.addEventListener('touchstart', dragStart, {passive:false});
+  function dragStart(e) {
+    if (e.target.classList.contains('sd-close')) return;
+    e.preventDefault(); isDragging = true;
+    var p = getXY(e); startX = p.x; startY = p.y;
+    startLeft = panel.offsetLeft; startTop = panel.offsetTop;
+    document.addEventListener('mousemove', dragMove); document.addEventListener('mouseup', dragEnd);
+    document.addEventListener('touchmove', dragMove, {passive:false}); document.addEventListener('touchend', dragEnd);
+  }
+  function dragMove(e) { if (!isDragging) return; e.preventDefault(); var p = getXY(e); panel.style.left = (startLeft + p.x - startX) + 'px'; panel.style.top = (startTop + p.y - startY) + 'px'; }
+  function dragEnd() { isDragging = false; savePos(); document.removeEventListener('mousemove', dragMove); document.removeEventListener('mouseup', dragEnd); document.removeEventListener('touchmove', dragMove); document.removeEventListener('touchend', dragEnd); }
+
+  // Resize
+  resizer.addEventListener('mousedown', resStart); resizer.addEventListener('touchstart', resStart, {passive:false});
+  function resStart(e) { e.preventDefault(); e.stopPropagation(); isResizing = true; var p = getXY(e); startX = p.x; startY = p.y; startW = panel.offsetWidth; startH = panel.offsetHeight;
+    document.addEventListener('mousemove', resMove); document.addEventListener('mouseup', resEnd);
+    document.addEventListener('touchmove', resMove, {passive:false}); document.addEventListener('touchend', resEnd); }
+  function resMove(e) { if (!isResizing) return; e.preventDefault(); var p = getXY(e); panel.style.width = Math.max(160, startW + p.x - startX) + 'px'; }
+  function resEnd() { isResizing = false; savePos(); document.removeEventListener('mousemove', resMove); document.removeEventListener('mouseup', resEnd); document.removeEventListener('touchmove', resMove); document.removeEventListener('touchend', resEnd); }
+})();
+
+/**
+ * setDashboard(json) — called from Kotlin to show the strategy score-table on the chart.
+ * JSON shape: { title, score, maxScore, rows:[{label,pass,status}], inPosition, pnlPct, htfBull, ... }
+ */
+function setDashboard(json) {
+  var panel = document.getElementById('strat-dashboard');
+  try {
+    var d = JSON.parse(json);
+    // Title + badge
+    document.getElementById('sd-title').textContent = d.title || 'Dashboard';
+    var badge = document.getElementById('sd-badge');
+    if (d.inPosition) { badge.textContent = 'IN TRADE'; badge.style.background = 'rgba(0,200,83,0.2)'; badge.style.color = '#00C853'; }
+    else { badge.textContent = 'WATCHING'; badge.style.background = '#1C2333'; badge.style.color = '#8B949E'; }
+
+    // Body — rows
+    var body = document.getElementById('sd-body');
+    var html = '';
+    if (d.rows) {
+      d.rows.forEach(function(r) {
+        var icon = r.pass ? '<span style="color:#00C853;font-weight:700;">✓</span>' : '<span style="color:#FF5252;font-weight:700;">✗</span>';
+        var valColor = r.pass ? '#00C853' : '#8B949E';
+        html += '<div class="sd-row"><span class="sd-label">' + (r.label||'') + '</span><span class="sd-icon">' + icon + '</span><span class="sd-val" style="color:'+valColor+'">' + (r.status||'') + '</span></div>';
+      });
+    }
+    // P&L row
+    if (d.inPosition && d.pnlPct != null) {
+      var pnlColor = d.pnlPct >= 0 ? '#00C853' : '#FF5252';
+      html += '<div class="sd-row" style="border:none;"><span class="sd-label" style="color:#E6EDF3;">P&L</span><span class="sd-icon"></span><span class="sd-val" style="color:'+pnlColor+';font-weight:700;">' + (d.pnlPct >= 0 ? '+' : '') + d.pnlPct.toFixed(2) + '%</span></div>';
+    }
+    body.innerHTML = html;
+
+    // Footer — score + HTF
+    var footer = document.getElementById('sd-footer');
+    var sc = d.score || 0;
+    var mx = d.maxScore || 10;
+    var scoreColor = sc >= 8 ? '#00C853' : sc >= 6 ? '#FFD700' : '#FF5252';
+    var readyText = sc >= 6 ? 'READY' : 'WAIT';
+    var htfText = d.htfBull ? '<span style="color:#00C853;">BULL</span>' : '<span style="color:#FF5252;">BEAR</span>';
+    footer.innerHTML = '<span style="color:'+scoreColor+';font-weight:700;">' + sc + '/' + mx + ' ' + readyText + '</span><span>HTF: ' + htfText + '</span>';
+
+    // Position defaults
+    if (!panel.style.left) { panel.style.right = '8px'; panel.style.top = '60px'; }
+    panel.style.display = 'block';
+  } catch(e) { console.error('[chart] setDashboard error:', e); }
+}
+
+function hideDashboard() {
+  document.getElementById('strat-dashboard').style.display = 'none';
+}
+
+/**
+ * setStrategyPlot(json) — called from Kotlin to push strategy-defined overlays/panels to the chart.
+ * Reuses the same rendering pipeline as setCustomIndicators().
+ */
+function setStrategyPlot(json) {
+  console.log('[chart] setStrategyPlot called');
+  setCustomIndicators(json);
+}
 
 // ─── Init ───────────────────────────────────────────────────────────
 initChart();

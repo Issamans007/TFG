@@ -5,6 +5,7 @@ import com.tfg.data.local.dao.AuditLogDao;
 import com.tfg.data.local.dao.OrderDao;
 import com.tfg.data.remote.api.BinanceApi;
 import com.tfg.data.remote.api.BinanceFuturesApi;
+import com.tfg.data.remote.api.BinanceTimeSync;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.Factory;
 import dagger.internal.QualifierMetadata;
@@ -38,35 +39,40 @@ public final class PortfolioRepositoryImpl_Factory implements Factory<PortfolioR
 
   private final Provider<AuditLogDao> auditLogDaoProvider;
 
+  private final Provider<BinanceTimeSync> timeSyncProvider;
+
   private final Provider<Function0<String>> secretProvider;
 
   public PortfolioRepositoryImpl_Factory(Provider<BinanceApi> binanceApiProvider,
       Provider<BinanceFuturesApi> binanceFuturesApiProvider,
       Provider<AssetBalanceDao> assetBalanceDaoProvider, Provider<OrderDao> orderDaoProvider,
-      Provider<AuditLogDao> auditLogDaoProvider, Provider<Function0<String>> secretProvider) {
+      Provider<AuditLogDao> auditLogDaoProvider, Provider<BinanceTimeSync> timeSyncProvider,
+      Provider<Function0<String>> secretProvider) {
     this.binanceApiProvider = binanceApiProvider;
     this.binanceFuturesApiProvider = binanceFuturesApiProvider;
     this.assetBalanceDaoProvider = assetBalanceDaoProvider;
     this.orderDaoProvider = orderDaoProvider;
     this.auditLogDaoProvider = auditLogDaoProvider;
+    this.timeSyncProvider = timeSyncProvider;
     this.secretProvider = secretProvider;
   }
 
   @Override
   public PortfolioRepositoryImpl get() {
-    return newInstance(binanceApiProvider.get(), binanceFuturesApiProvider.get(), assetBalanceDaoProvider.get(), orderDaoProvider.get(), auditLogDaoProvider.get(), secretProvider.get());
+    return newInstance(binanceApiProvider.get(), binanceFuturesApiProvider.get(), assetBalanceDaoProvider.get(), orderDaoProvider.get(), auditLogDaoProvider.get(), timeSyncProvider.get(), secretProvider.get());
   }
 
   public static PortfolioRepositoryImpl_Factory create(Provider<BinanceApi> binanceApiProvider,
       Provider<BinanceFuturesApi> binanceFuturesApiProvider,
       Provider<AssetBalanceDao> assetBalanceDaoProvider, Provider<OrderDao> orderDaoProvider,
-      Provider<AuditLogDao> auditLogDaoProvider, Provider<Function0<String>> secretProvider) {
-    return new PortfolioRepositoryImpl_Factory(binanceApiProvider, binanceFuturesApiProvider, assetBalanceDaoProvider, orderDaoProvider, auditLogDaoProvider, secretProvider);
+      Provider<AuditLogDao> auditLogDaoProvider, Provider<BinanceTimeSync> timeSyncProvider,
+      Provider<Function0<String>> secretProvider) {
+    return new PortfolioRepositoryImpl_Factory(binanceApiProvider, binanceFuturesApiProvider, assetBalanceDaoProvider, orderDaoProvider, auditLogDaoProvider, timeSyncProvider, secretProvider);
   }
 
   public static PortfolioRepositoryImpl newInstance(BinanceApi binanceApi,
       BinanceFuturesApi binanceFuturesApi, AssetBalanceDao assetBalanceDao, OrderDao orderDao,
-      AuditLogDao auditLogDao, Function0<String> secretProvider) {
-    return new PortfolioRepositoryImpl(binanceApi, binanceFuturesApi, assetBalanceDao, orderDao, auditLogDao, secretProvider);
+      AuditLogDao auditLogDao, BinanceTimeSync timeSync, Function0<String> secretProvider) {
+    return new PortfolioRepositoryImpl(binanceApi, binanceFuturesApi, assetBalanceDao, orderDao, auditLogDao, timeSync, secretProvider);
   }
 }

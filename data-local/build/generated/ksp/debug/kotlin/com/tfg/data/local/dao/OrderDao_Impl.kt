@@ -36,7 +36,7 @@ public class OrderDao_Impl(
     this.__db = __db
     this.__insertAdapterOfOrderEntity = object : EntityInsertAdapter<OrderEntity>() {
       protected override fun createQuery(): String =
-          "INSERT OR REPLACE INTO `orders` (`id`,`signalId`,`symbol`,`side`,`type`,`status`,`executionMode`,`quantity`,`price`,`stopPrice`,`takeProfitsJson`,`stopLossesJson`,`trailingStopPercent`,`trailingStopActivationPrice`,`ocoLinkedOrderId`,`bracketParentId`,`timeInForce`,`scheduledAt`,`filledQuantity`,`filledPrice`,`fee`,`feeAsset`,`donationAmount`,`realizedPnl`,`slippage`,`isPaperTrade`,`createdAt`,`updatedAt`,`executedAt`,`closedAt`,`binanceOrderId`,`errorMessage`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+          "INSERT OR REPLACE INTO `orders` (`id`,`signalId`,`symbol`,`side`,`type`,`status`,`executionMode`,`quantity`,`price`,`stopPrice`,`takeProfitsJson`,`stopLossesJson`,`trailingStopPercent`,`trailingStopActivationPrice`,`ocoLinkedOrderId`,`bracketParentId`,`timeInForce`,`scheduledAt`,`filledQuantity`,`filledPrice`,`fee`,`feeAsset`,`donationAmount`,`realizedPnl`,`slippage`,`isPaperTrade`,`createdAt`,`updatedAt`,`executedAt`,`closedAt`,`binanceOrderId`,`errorMessage`,`marketType`,`leverage`,`marginType`,`positionSide`,`reduceOnly`,`closePosition`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 
       protected override fun bind(statement: SQLiteStatement, entity: OrderEntity) {
         statement.bindText(1, entity.id)
@@ -132,11 +132,19 @@ public class OrderDao_Impl(
         } else {
           statement.bindText(32, _tmpErrorMessage)
         }
+        statement.bindText(33, entity.marketType)
+        statement.bindLong(34, entity.leverage.toLong())
+        statement.bindText(35, entity.marginType)
+        statement.bindText(36, entity.positionSide)
+        val _tmp_1: Int = if (entity.reduceOnly) 1 else 0
+        statement.bindLong(37, _tmp_1.toLong())
+        val _tmp_2: Int = if (entity.closePosition) 1 else 0
+        statement.bindLong(38, _tmp_2.toLong())
       }
     }
     this.__updateAdapterOfOrderEntity = object : EntityDeleteOrUpdateAdapter<OrderEntity>() {
       protected override fun createQuery(): String =
-          "UPDATE OR ABORT `orders` SET `id` = ?,`signalId` = ?,`symbol` = ?,`side` = ?,`type` = ?,`status` = ?,`executionMode` = ?,`quantity` = ?,`price` = ?,`stopPrice` = ?,`takeProfitsJson` = ?,`stopLossesJson` = ?,`trailingStopPercent` = ?,`trailingStopActivationPrice` = ?,`ocoLinkedOrderId` = ?,`bracketParentId` = ?,`timeInForce` = ?,`scheduledAt` = ?,`filledQuantity` = ?,`filledPrice` = ?,`fee` = ?,`feeAsset` = ?,`donationAmount` = ?,`realizedPnl` = ?,`slippage` = ?,`isPaperTrade` = ?,`createdAt` = ?,`updatedAt` = ?,`executedAt` = ?,`closedAt` = ?,`binanceOrderId` = ?,`errorMessage` = ? WHERE `id` = ?"
+          "UPDATE OR ABORT `orders` SET `id` = ?,`signalId` = ?,`symbol` = ?,`side` = ?,`type` = ?,`status` = ?,`executionMode` = ?,`quantity` = ?,`price` = ?,`stopPrice` = ?,`takeProfitsJson` = ?,`stopLossesJson` = ?,`trailingStopPercent` = ?,`trailingStopActivationPrice` = ?,`ocoLinkedOrderId` = ?,`bracketParentId` = ?,`timeInForce` = ?,`scheduledAt` = ?,`filledQuantity` = ?,`filledPrice` = ?,`fee` = ?,`feeAsset` = ?,`donationAmount` = ?,`realizedPnl` = ?,`slippage` = ?,`isPaperTrade` = ?,`createdAt` = ?,`updatedAt` = ?,`executedAt` = ?,`closedAt` = ?,`binanceOrderId` = ?,`errorMessage` = ?,`marketType` = ?,`leverage` = ?,`marginType` = ?,`positionSide` = ?,`reduceOnly` = ?,`closePosition` = ? WHERE `id` = ?"
 
       protected override fun bind(statement: SQLiteStatement, entity: OrderEntity) {
         statement.bindText(1, entity.id)
@@ -232,7 +240,15 @@ public class OrderDao_Impl(
         } else {
           statement.bindText(32, _tmpErrorMessage)
         }
-        statement.bindText(33, entity.id)
+        statement.bindText(33, entity.marketType)
+        statement.bindLong(34, entity.leverage.toLong())
+        statement.bindText(35, entity.marginType)
+        statement.bindText(36, entity.positionSide)
+        val _tmp_1: Int = if (entity.reduceOnly) 1 else 0
+        statement.bindLong(37, _tmp_1.toLong())
+        val _tmp_2: Int = if (entity.closePosition) 1 else 0
+        statement.bindLong(38, _tmp_2.toLong())
+        statement.bindText(39, entity.id)
       }
     }
   }
@@ -292,6 +308,12 @@ public class OrderDao_Impl(
         val _columnIndexOfClosedAt: Int = getColumnIndexOrThrow(_stmt, "closedAt")
         val _columnIndexOfBinanceOrderId: Int = getColumnIndexOrThrow(_stmt, "binanceOrderId")
         val _columnIndexOfErrorMessage: Int = getColumnIndexOrThrow(_stmt, "errorMessage")
+        val _columnIndexOfMarketType: Int = getColumnIndexOrThrow(_stmt, "marketType")
+        val _columnIndexOfLeverage: Int = getColumnIndexOrThrow(_stmt, "leverage")
+        val _columnIndexOfMarginType: Int = getColumnIndexOrThrow(_stmt, "marginType")
+        val _columnIndexOfPositionSide: Int = getColumnIndexOrThrow(_stmt, "positionSide")
+        val _columnIndexOfReduceOnly: Int = getColumnIndexOrThrow(_stmt, "reduceOnly")
+        val _columnIndexOfClosePosition: Int = getColumnIndexOrThrow(_stmt, "closePosition")
         val _result: MutableList<OrderEntity> = mutableListOf()
         while (_stmt.step()) {
           val _item: OrderEntity
@@ -410,8 +432,24 @@ public class OrderDao_Impl(
           } else {
             _tmpErrorMessage = _stmt.getText(_columnIndexOfErrorMessage)
           }
+          val _tmpMarketType: String
+          _tmpMarketType = _stmt.getText(_columnIndexOfMarketType)
+          val _tmpLeverage: Int
+          _tmpLeverage = _stmt.getLong(_columnIndexOfLeverage).toInt()
+          val _tmpMarginType: String
+          _tmpMarginType = _stmt.getText(_columnIndexOfMarginType)
+          val _tmpPositionSide: String
+          _tmpPositionSide = _stmt.getText(_columnIndexOfPositionSide)
+          val _tmpReduceOnly: Boolean
+          val _tmp_1: Int
+          _tmp_1 = _stmt.getLong(_columnIndexOfReduceOnly).toInt()
+          _tmpReduceOnly = _tmp_1 != 0
+          val _tmpClosePosition: Boolean
+          val _tmp_2: Int
+          _tmp_2 = _stmt.getLong(_columnIndexOfClosePosition).toInt()
+          _tmpClosePosition = _tmp_2 != 0
           _item =
-              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage)
+              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage,_tmpMarketType,_tmpLeverage,_tmpMarginType,_tmpPositionSide,_tmpReduceOnly,_tmpClosePosition)
           _result.add(_item)
         }
         _result
@@ -462,6 +500,12 @@ public class OrderDao_Impl(
         val _columnIndexOfClosedAt: Int = getColumnIndexOrThrow(_stmt, "closedAt")
         val _columnIndexOfBinanceOrderId: Int = getColumnIndexOrThrow(_stmt, "binanceOrderId")
         val _columnIndexOfErrorMessage: Int = getColumnIndexOrThrow(_stmt, "errorMessage")
+        val _columnIndexOfMarketType: Int = getColumnIndexOrThrow(_stmt, "marketType")
+        val _columnIndexOfLeverage: Int = getColumnIndexOrThrow(_stmt, "leverage")
+        val _columnIndexOfMarginType: Int = getColumnIndexOrThrow(_stmt, "marginType")
+        val _columnIndexOfPositionSide: Int = getColumnIndexOrThrow(_stmt, "positionSide")
+        val _columnIndexOfReduceOnly: Int = getColumnIndexOrThrow(_stmt, "reduceOnly")
+        val _columnIndexOfClosePosition: Int = getColumnIndexOrThrow(_stmt, "closePosition")
         val _result: MutableList<OrderEntity> = mutableListOf()
         while (_stmt.step()) {
           val _item: OrderEntity
@@ -580,8 +624,24 @@ public class OrderDao_Impl(
           } else {
             _tmpErrorMessage = _stmt.getText(_columnIndexOfErrorMessage)
           }
+          val _tmpMarketType: String
+          _tmpMarketType = _stmt.getText(_columnIndexOfMarketType)
+          val _tmpLeverage: Int
+          _tmpLeverage = _stmt.getLong(_columnIndexOfLeverage).toInt()
+          val _tmpMarginType: String
+          _tmpMarginType = _stmt.getText(_columnIndexOfMarginType)
+          val _tmpPositionSide: String
+          _tmpPositionSide = _stmt.getText(_columnIndexOfPositionSide)
+          val _tmpReduceOnly: Boolean
+          val _tmp_1: Int
+          _tmp_1 = _stmt.getLong(_columnIndexOfReduceOnly).toInt()
+          _tmpReduceOnly = _tmp_1 != 0
+          val _tmpClosePosition: Boolean
+          val _tmp_2: Int
+          _tmp_2 = _stmt.getLong(_columnIndexOfClosePosition).toInt()
+          _tmpClosePosition = _tmp_2 != 0
           _item =
-              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage)
+              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage,_tmpMarketType,_tmpLeverage,_tmpMarginType,_tmpPositionSide,_tmpReduceOnly,_tmpClosePosition)
           _result.add(_item)
         }
         _result
@@ -632,6 +692,12 @@ public class OrderDao_Impl(
         val _columnIndexOfClosedAt: Int = getColumnIndexOrThrow(_stmt, "closedAt")
         val _columnIndexOfBinanceOrderId: Int = getColumnIndexOrThrow(_stmt, "binanceOrderId")
         val _columnIndexOfErrorMessage: Int = getColumnIndexOrThrow(_stmt, "errorMessage")
+        val _columnIndexOfMarketType: Int = getColumnIndexOrThrow(_stmt, "marketType")
+        val _columnIndexOfLeverage: Int = getColumnIndexOrThrow(_stmt, "leverage")
+        val _columnIndexOfMarginType: Int = getColumnIndexOrThrow(_stmt, "marginType")
+        val _columnIndexOfPositionSide: Int = getColumnIndexOrThrow(_stmt, "positionSide")
+        val _columnIndexOfReduceOnly: Int = getColumnIndexOrThrow(_stmt, "reduceOnly")
+        val _columnIndexOfClosePosition: Int = getColumnIndexOrThrow(_stmt, "closePosition")
         val _result: OrderEntity?
         if (_stmt.step()) {
           val _tmpId: String
@@ -749,8 +815,24 @@ public class OrderDao_Impl(
           } else {
             _tmpErrorMessage = _stmt.getText(_columnIndexOfErrorMessage)
           }
+          val _tmpMarketType: String
+          _tmpMarketType = _stmt.getText(_columnIndexOfMarketType)
+          val _tmpLeverage: Int
+          _tmpLeverage = _stmt.getLong(_columnIndexOfLeverage).toInt()
+          val _tmpMarginType: String
+          _tmpMarginType = _stmt.getText(_columnIndexOfMarginType)
+          val _tmpPositionSide: String
+          _tmpPositionSide = _stmt.getText(_columnIndexOfPositionSide)
+          val _tmpReduceOnly: Boolean
+          val _tmp_1: Int
+          _tmp_1 = _stmt.getLong(_columnIndexOfReduceOnly).toInt()
+          _tmpReduceOnly = _tmp_1 != 0
+          val _tmpClosePosition: Boolean
+          val _tmp_2: Int
+          _tmp_2 = _stmt.getLong(_columnIndexOfClosePosition).toInt()
+          _tmpClosePosition = _tmp_2 != 0
           _result =
-              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage)
+              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage,_tmpMarketType,_tmpLeverage,_tmpMarginType,_tmpPositionSide,_tmpReduceOnly,_tmpClosePosition)
         } else {
           _result = null
         }
@@ -803,6 +885,12 @@ public class OrderDao_Impl(
         val _columnIndexOfClosedAt: Int = getColumnIndexOrThrow(_stmt, "closedAt")
         val _columnIndexOfBinanceOrderId: Int = getColumnIndexOrThrow(_stmt, "binanceOrderId")
         val _columnIndexOfErrorMessage: Int = getColumnIndexOrThrow(_stmt, "errorMessage")
+        val _columnIndexOfMarketType: Int = getColumnIndexOrThrow(_stmt, "marketType")
+        val _columnIndexOfLeverage: Int = getColumnIndexOrThrow(_stmt, "leverage")
+        val _columnIndexOfMarginType: Int = getColumnIndexOrThrow(_stmt, "marginType")
+        val _columnIndexOfPositionSide: Int = getColumnIndexOrThrow(_stmt, "positionSide")
+        val _columnIndexOfReduceOnly: Int = getColumnIndexOrThrow(_stmt, "reduceOnly")
+        val _columnIndexOfClosePosition: Int = getColumnIndexOrThrow(_stmt, "closePosition")
         val _result: MutableList<OrderEntity> = mutableListOf()
         while (_stmt.step()) {
           val _item: OrderEntity
@@ -921,8 +1009,24 @@ public class OrderDao_Impl(
           } else {
             _tmpErrorMessage = _stmt.getText(_columnIndexOfErrorMessage)
           }
+          val _tmpMarketType: String
+          _tmpMarketType = _stmt.getText(_columnIndexOfMarketType)
+          val _tmpLeverage: Int
+          _tmpLeverage = _stmt.getLong(_columnIndexOfLeverage).toInt()
+          val _tmpMarginType: String
+          _tmpMarginType = _stmt.getText(_columnIndexOfMarginType)
+          val _tmpPositionSide: String
+          _tmpPositionSide = _stmt.getText(_columnIndexOfPositionSide)
+          val _tmpReduceOnly: Boolean
+          val _tmp_1: Int
+          _tmp_1 = _stmt.getLong(_columnIndexOfReduceOnly).toInt()
+          _tmpReduceOnly = _tmp_1 != 0
+          val _tmpClosePosition: Boolean
+          val _tmp_2: Int
+          _tmp_2 = _stmt.getLong(_columnIndexOfClosePosition).toInt()
+          _tmpClosePosition = _tmp_2 != 0
           _item =
-              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage)
+              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage,_tmpMarketType,_tmpLeverage,_tmpMarginType,_tmpPositionSide,_tmpReduceOnly,_tmpClosePosition)
           _result.add(_item)
         }
         _result
@@ -973,6 +1077,12 @@ public class OrderDao_Impl(
         val _columnIndexOfClosedAt: Int = getColumnIndexOrThrow(_stmt, "closedAt")
         val _columnIndexOfBinanceOrderId: Int = getColumnIndexOrThrow(_stmt, "binanceOrderId")
         val _columnIndexOfErrorMessage: Int = getColumnIndexOrThrow(_stmt, "errorMessage")
+        val _columnIndexOfMarketType: Int = getColumnIndexOrThrow(_stmt, "marketType")
+        val _columnIndexOfLeverage: Int = getColumnIndexOrThrow(_stmt, "leverage")
+        val _columnIndexOfMarginType: Int = getColumnIndexOrThrow(_stmt, "marginType")
+        val _columnIndexOfPositionSide: Int = getColumnIndexOrThrow(_stmt, "positionSide")
+        val _columnIndexOfReduceOnly: Int = getColumnIndexOrThrow(_stmt, "reduceOnly")
+        val _columnIndexOfClosePosition: Int = getColumnIndexOrThrow(_stmt, "closePosition")
         val _result: MutableList<OrderEntity> = mutableListOf()
         while (_stmt.step()) {
           val _item: OrderEntity
@@ -1091,8 +1201,24 @@ public class OrderDao_Impl(
           } else {
             _tmpErrorMessage = _stmt.getText(_columnIndexOfErrorMessage)
           }
+          val _tmpMarketType: String
+          _tmpMarketType = _stmt.getText(_columnIndexOfMarketType)
+          val _tmpLeverage: Int
+          _tmpLeverage = _stmt.getLong(_columnIndexOfLeverage).toInt()
+          val _tmpMarginType: String
+          _tmpMarginType = _stmt.getText(_columnIndexOfMarginType)
+          val _tmpPositionSide: String
+          _tmpPositionSide = _stmt.getText(_columnIndexOfPositionSide)
+          val _tmpReduceOnly: Boolean
+          val _tmp_1: Int
+          _tmp_1 = _stmt.getLong(_columnIndexOfReduceOnly).toInt()
+          _tmpReduceOnly = _tmp_1 != 0
+          val _tmpClosePosition: Boolean
+          val _tmp_2: Int
+          _tmp_2 = _stmt.getLong(_columnIndexOfClosePosition).toInt()
+          _tmpClosePosition = _tmp_2 != 0
           _item =
-              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage)
+              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage,_tmpMarketType,_tmpLeverage,_tmpMarginType,_tmpPositionSide,_tmpReduceOnly,_tmpClosePosition)
           _result.add(_item)
         }
         _result
@@ -1143,6 +1269,12 @@ public class OrderDao_Impl(
         val _columnIndexOfClosedAt: Int = getColumnIndexOrThrow(_stmt, "closedAt")
         val _columnIndexOfBinanceOrderId: Int = getColumnIndexOrThrow(_stmt, "binanceOrderId")
         val _columnIndexOfErrorMessage: Int = getColumnIndexOrThrow(_stmt, "errorMessage")
+        val _columnIndexOfMarketType: Int = getColumnIndexOrThrow(_stmt, "marketType")
+        val _columnIndexOfLeverage: Int = getColumnIndexOrThrow(_stmt, "leverage")
+        val _columnIndexOfMarginType: Int = getColumnIndexOrThrow(_stmt, "marginType")
+        val _columnIndexOfPositionSide: Int = getColumnIndexOrThrow(_stmt, "positionSide")
+        val _columnIndexOfReduceOnly: Int = getColumnIndexOrThrow(_stmt, "reduceOnly")
+        val _columnIndexOfClosePosition: Int = getColumnIndexOrThrow(_stmt, "closePosition")
         val _result: OrderEntity?
         if (_stmt.step()) {
           val _tmpId: String
@@ -1260,8 +1392,24 @@ public class OrderDao_Impl(
           } else {
             _tmpErrorMessage = _stmt.getText(_columnIndexOfErrorMessage)
           }
+          val _tmpMarketType: String
+          _tmpMarketType = _stmt.getText(_columnIndexOfMarketType)
+          val _tmpLeverage: Int
+          _tmpLeverage = _stmt.getLong(_columnIndexOfLeverage).toInt()
+          val _tmpMarginType: String
+          _tmpMarginType = _stmt.getText(_columnIndexOfMarginType)
+          val _tmpPositionSide: String
+          _tmpPositionSide = _stmt.getText(_columnIndexOfPositionSide)
+          val _tmpReduceOnly: Boolean
+          val _tmp_1: Int
+          _tmp_1 = _stmt.getLong(_columnIndexOfReduceOnly).toInt()
+          _tmpReduceOnly = _tmp_1 != 0
+          val _tmpClosePosition: Boolean
+          val _tmp_2: Int
+          _tmp_2 = _stmt.getLong(_columnIndexOfClosePosition).toInt()
+          _tmpClosePosition = _tmp_2 != 0
           _result =
-              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage)
+              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage,_tmpMarketType,_tmpLeverage,_tmpMarginType,_tmpPositionSide,_tmpReduceOnly,_tmpClosePosition)
         } else {
           _result = null
         }
@@ -1362,6 +1510,12 @@ public class OrderDao_Impl(
         val _columnIndexOfClosedAt: Int = getColumnIndexOrThrow(_stmt, "closedAt")
         val _columnIndexOfBinanceOrderId: Int = getColumnIndexOrThrow(_stmt, "binanceOrderId")
         val _columnIndexOfErrorMessage: Int = getColumnIndexOrThrow(_stmt, "errorMessage")
+        val _columnIndexOfMarketType: Int = getColumnIndexOrThrow(_stmt, "marketType")
+        val _columnIndexOfLeverage: Int = getColumnIndexOrThrow(_stmt, "leverage")
+        val _columnIndexOfMarginType: Int = getColumnIndexOrThrow(_stmt, "marginType")
+        val _columnIndexOfPositionSide: Int = getColumnIndexOrThrow(_stmt, "positionSide")
+        val _columnIndexOfReduceOnly: Int = getColumnIndexOrThrow(_stmt, "reduceOnly")
+        val _columnIndexOfClosePosition: Int = getColumnIndexOrThrow(_stmt, "closePosition")
         val _result: MutableList<OrderEntity> = mutableListOf()
         while (_stmt.step()) {
           val _item: OrderEntity
@@ -1480,8 +1634,24 @@ public class OrderDao_Impl(
           } else {
             _tmpErrorMessage = _stmt.getText(_columnIndexOfErrorMessage)
           }
+          val _tmpMarketType: String
+          _tmpMarketType = _stmt.getText(_columnIndexOfMarketType)
+          val _tmpLeverage: Int
+          _tmpLeverage = _stmt.getLong(_columnIndexOfLeverage).toInt()
+          val _tmpMarginType: String
+          _tmpMarginType = _stmt.getText(_columnIndexOfMarginType)
+          val _tmpPositionSide: String
+          _tmpPositionSide = _stmt.getText(_columnIndexOfPositionSide)
+          val _tmpReduceOnly: Boolean
+          val _tmp_2: Int
+          _tmp_2 = _stmt.getLong(_columnIndexOfReduceOnly).toInt()
+          _tmpReduceOnly = _tmp_2 != 0
+          val _tmpClosePosition: Boolean
+          val _tmp_3: Int
+          _tmp_3 = _stmt.getLong(_columnIndexOfClosePosition).toInt()
+          _tmpClosePosition = _tmp_3 != 0
           _item =
-              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage)
+              OrderEntity(_tmpId,_tmpSignalId,_tmpSymbol,_tmpSide,_tmpType,_tmpStatus,_tmpExecutionMode,_tmpQuantity,_tmpPrice,_tmpStopPrice,_tmpTakeProfitsJson,_tmpStopLossesJson,_tmpTrailingStopPercent,_tmpTrailingStopActivationPrice,_tmpOcoLinkedOrderId,_tmpBracketParentId,_tmpTimeInForce,_tmpScheduledAt,_tmpFilledQuantity,_tmpFilledPrice,_tmpFee,_tmpFeeAsset,_tmpDonationAmount,_tmpRealizedPnl,_tmpSlippage,_tmpIsPaperTrade,_tmpCreatedAt,_tmpUpdatedAt,_tmpExecutedAt,_tmpClosedAt,_tmpBinanceOrderId,_tmpErrorMessage,_tmpMarketType,_tmpLeverage,_tmpMarginType,_tmpPositionSide,_tmpReduceOnly,_tmpClosePosition)
           _result.add(_item)
         }
         _result

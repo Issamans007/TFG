@@ -22,9 +22,44 @@ interface ScriptExecutor {
     /** Returns console.log output captured during the last evaluate() call. */
     fun getLastLogs(): List<String> = emptyList()
 
+    /** Returns the `_state.dashboard` object from the last evaluate() as a JSON string, or null. */
+    fun getLastDashboard(): String? = null
+
+    /** Returns the `_state.plot` object from the last evaluate() as a JSON string, or null. */
+    fun getLastPlotData(): String? = null
+
+    /** Returns the `_state.diag` object from the last evaluate() as a JSON string, or null.
+     *  Strategies can populate this to surface why they emitted (or didn't emit) signals. */
+    fun getLastDiag(): String? = null
+
+    /**
+     * Returns the number of evaluate() calls that have thrown / timed out and
+     * fallen back to HOLD since the last reset, then resets the counter to 0.
+     * The backtest engine reads this at the end of a run to surface silent
+     * QuickJS watchdog timeouts that would otherwise hide as "0 trades".
+     */
+    fun getAndResetErrorCount(): Int = 0
+
     /** Try-compile code and return an error message, or null if valid. */
     fun validateSyntax(code: String): String? = null
+
+    /**
+     * Runs the strategy ONCE on the supplied candles and reports any runtime
+     * error along with captured console output. Used by the "Check Script"
+     * button to surface errors that the backtest loop would otherwise swallow.
+     */
+    fun runtimeCheck(code: String, candles: List<Candle>, params: Map<String, String>): RuntimeCheckResult =
+        RuntimeCheckResult(ok = false, signalType = "HOLD", errorMessage = "runtimeCheck not implemented", logs = emptyList(), elapsedMs = 0L)
 
     /** Reset persistent `_state` object between runs (e.g. between backtests). */
     fun resetState() {}
 }
+
+/** Result of a one-shot runtime check (see [ScriptExecutor.runtimeCheck]). */
+data class RuntimeCheckResult(
+    val ok: Boolean,
+    val signalType: String,
+    val errorMessage: String?,
+    val logs: List<String>,
+    val elapsedMs: Long
+)

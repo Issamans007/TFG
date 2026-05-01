@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -35,6 +36,7 @@ import com.tfg.domain.model.CustomTemplate
 import com.tfg.domain.model.Script
 import com.tfg.domain.model.SignalMarker
 import com.tfg.domain.model.SignalType
+import com.tfg.domain.model.OrderSide
 import com.tfg.feature.chart.TradingViewChart
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,6 +49,7 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
     var showTemplates by remember { mutableStateOf(false) }
     var showPairPicker by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
+    var showPlanDialog by remember { mutableStateOf(false) }
     var currentTab by remember { mutableIntStateOf(0) } // 0=Editor, 1=Templates, 2=My Strategies, 3=Docs, 4=Visual Builder
 
     // C5: Share backtest CSV when ready
@@ -100,6 +103,18 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
         )
     }
 
+    // Trading Plan dialog
+    if (showPlanDialog) {
+        PlanDialog(
+            initial = viewModel.currentPlan(),
+            onDismiss = { showPlanDialog = false },
+            onSave = { plan ->
+                viewModel.savePlan(plan)
+                showPlanDialog = false
+            }
+        )
+    }
+
     // Backtest dialog
     if (showBacktestDialog) {
         var symbol by remember { mutableStateOf(state.selectedPair) }
@@ -118,7 +133,10 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
             onDismissRequest = { showBacktestDialog = false },
             title = { Text("Backtest Configuration", color = TextPrimary) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
                     // ── Pair selector ──
                     Text("Trading Pair", fontSize = 12.sp, color = TextSecondary)
                     ExposedDropdownMenuBox(
@@ -241,6 +259,104 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
+                    }
+
+                    // ── Market Type + Leverage (overrides plan during backtest) ──
+                    Spacer(Modifier.height(4.dp))
+                    Text("Market Type", fontSize = 12.sp, color = TextSecondary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = state.backtestMarketType == com.tfg.domain.model.MarketType.SPOT,
+                            onClick = { viewModel.updateBacktestMarketType(com.tfg.domain.model.MarketType.SPOT) },
+                            label = { Text("Spot") }
+                        )
+                        FilterChip(
+                            selected = state.backtestMarketType == com.tfg.domain.model.MarketType.FUTURES_USDM,
+                            onClick = { viewModel.updateBacktestMarketType(com.tfg.domain.model.MarketType.FUTURES_USDM) },
+                            label = { Text("Futures USDⓈ-M") }
+                        )
+                    }
+                    if (state.backtestMarketType == com.tfg.domain.model.MarketType.FUTURES_USDM) {
+                        Text("Leverage: ${state.backtestLeverage}x", fontSize = 12.sp, color = TextSecondary)
+                        Slider(
+                            value = state.backtestLeverage.toFloat(),
+                            onValueChange = { viewModel.updateBacktestLeverage(it.toInt()) },
+                            valueRange = 1f..125f,
+                            steps = 0,
+                            colors = SliderDefaults.colors(thumbColor = AccentBlue, activeTrackColor = AccentBlue)
+                        )
+                    }
+
+                    // ── Cost & Capital (B3) ──
+                    Spacer(Modifier.height(4.dp))
+                    Text("Costs & Capital", fontSize = 12.sp, color = TextSecondary)
+                    var capitalText by remember(state.backtestStartingCapital) {
+                        mutableStateOf(state.backtestStartingCapital.let {
+                            if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString()
+                        })
+                    }
+                    var makerText by remember(state.backtestMakerFee) { mutableStateOf(state.backtestMakerFee.toString()) }
+                    var takerText by remember(state.backtestTakerFee) { mutableStateOf(state.backtestTakerFee.toString()) }
+                    var slipText  by remember(state.backtestSlippagePct) { mutableStateOf(state.backtestSlippagePct.toString()) }
+                    Text("Starting capital (USD)", fontSize = 11.sp, color = TextSecondary)
+                    OutlinedTextField(
+                        value = capitalText,
+                        onValueChange = {
+                            capitalText = it.filter { c -> c.isDigit() || c == '.' }
+                            capitalText.toDoubleOrNull()?.let(viewModel::updateBacktestStartingCapital)
+                        },
+                        placeholder = { Text("e.g. 10000") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        colors = com.tfg.core.ui.tfgTextFieldColors(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Maker fee %", fontSize = 11.sp, color = TextSecondary)
+                            OutlinedTextField(
+                                value = makerText,
+                                onValueChange = {
+                                    makerText = it.filter { c -> c.isDigit() || c == '.' }
+                                    makerText.toDoubleOrNull()?.let(viewModel::updateBacktestMakerFee)
+                                },
+                                placeholder = { Text("0.1") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                colors = com.tfg.core.ui.tfgTextFieldColors(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Taker fee %", fontSize = 11.sp, color = TextSecondary)
+                            OutlinedTextField(
+                                value = takerText,
+                                onValueChange = {
+                                    takerText = it.filter { c -> c.isDigit() || c == '.' }
+                                    takerText.toDoubleOrNull()?.let(viewModel::updateBacktestTakerFee)
+                                },
+                                placeholder = { Text("0.1") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                colors = com.tfg.core.ui.tfgTextFieldColors(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Slippage %", fontSize = 11.sp, color = TextSecondary)
+                            OutlinedTextField(
+                                value = slipText,
+                                onValueChange = {
+                                    slipText = it.filter { c -> c.isDigit() || c == '.' }
+                                    slipText.toDoubleOrNull()?.let(viewModel::updateBacktestSlippage)
+                                },
+                                placeholder = { Text("0.0") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                colors = com.tfg.core.ui.tfgTextFieldColors(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             },
@@ -529,7 +645,8 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
                 onSave = { showSaveDialog = true },
                 onBacktest = { showBacktestDialog = true },
                 onPickPair = { showPairPicker = true },
-                onSaveAsTemplate = { showSaveTemplateDialog = true }
+                onSaveAsTemplate = { showSaveTemplateDialog = true },
+                onPlan = { showPlanDialog = true }
             )
             1 -> TemplatesTab(
                 state = state,
@@ -573,7 +690,8 @@ private fun EditorTab(
     onSave: () -> Unit,
     onBacktest: () -> Unit,
     onPickPair: () -> Unit,
-    onSaveAsTemplate: () -> Unit
+    onSaveAsTemplate: () -> Unit,
+    onPlan: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         // Toolbar
@@ -615,6 +733,9 @@ private fun EditorTab(
                 IconButton(onClick = onSaveAsTemplate, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.Bookmark, "Save as Template", tint = AccentOrange, modifier = Modifier.size(20.dp))
                 }
+                IconButton(onClick = onPlan, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Tune, "Trading Plan", tint = AccentPurple, modifier = Modifier.size(20.dp))
+                }
                 IconButton(onClick = onBacktest, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.PlayArrow, "Backtest", tint = Green500, modifier = Modifier.size(20.dp))
                 }
@@ -624,6 +745,7 @@ private fun EditorTab(
         // ─── Scrollable content ─────────────────────────────────────
         val density = LocalDensity.current
         var miniChartHeight by remember { mutableStateOf(150.dp) }
+        var showMiniDrawingTools by remember { mutableStateOf(false) }
 
         Column(
             modifier = Modifier
@@ -638,16 +760,39 @@ private fun EditorTab(
                 state.candles.take(state.replayBarIndex + 1) else state.candles
             val displaySignals = if (state.replayMode)
                 state.replaySignals else state.signalMarkers
+            // Toggle row for drawing tools (hidden by default)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(
+                    onClick = { showMiniDrawingTools = !showMiniDrawingTools },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = if (showMiniDrawingTools) "Hide drawing tools" else "Show drawing tools",
+                        tint = if (showMiniDrawingTools) AccentBlue else TextTertiary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
             TradingViewChart(
                 candles = displayCandles,
                 signals = displaySignals,
                 overlayIndicators = emptyList(),
                 subIndicators = emptyList(),
                 livePrice = null,
-                showDrawingTools = false,
+                showDrawingTools = showMiniDrawingTools,
                 supertrendData = null,
                 ichimokuData = null,
                 cloudOverlays = emptyList(),
+                strategyPlotJson = state.strategyPlotJson,
+                dashboardJson = state.dashboardOverlayJson,
+                symbol = state.selectedPair,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(miniChartHeight)
@@ -1158,6 +1303,31 @@ private fun EditorTab(
             minHeight = 350.dp
         )
 
+        // ─── Check Script (runtime error scan) ──────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = { viewModel.checkRuntime() },
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Check Script", fontSize = 12.sp)
+            }
+            if (state.console.isNotEmpty()) {
+                OutlinedButton(onClick = { viewModel.clearConsole() }) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Clear logs", fontSize = 11.sp)
+                }
+            }
+        }
+
         // ─── Syntax Error Bar ───────────────────────────────────────
         state.syntaxError?.let { err ->
             Row(
@@ -1205,17 +1375,25 @@ private fun EditorTab(
                         }
                     }
                     AnimatedVisibility(visible = consoleExpanded) {
+                        // Do NOT use verticalScroll here — the outer Column is already
+                        // scrollable; nested vertical scrollers crash on Android.
+                        // Instead show the last 80 lines inside a fixed-height box;
+                        // the user can scroll the whole page to read them.
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 180.dp)
-                                .verticalScroll(rememberScrollState())
                                 .background(Color(0xFF0D0D1A), RoundedCornerShape(6.dp))
                                 .padding(8.dp)
                         ) {
-                            state.console.forEach { line ->
+                            val displayLines = if (state.console.size > 80) state.console.takeLast(80) else state.console
+                            if (state.console.size > 80) {
+                                Text("… (${state.console.size - 80} earlier lines hidden — scroll up)",
+                                    fontSize = 9.sp, color = TextTertiary, fontFamily = FontFamily.Monospace)
+                            }
+                            displayLines.forEach { line ->
                                 val isWarn = line.startsWith("[WARN]")
                                 val isErr = line.startsWith("[ERROR]")
+                                val isCheck = line.startsWith("[CHECK]")
                                 Text(
                                     line,
                                     fontSize = 10.sp,
@@ -1223,6 +1401,7 @@ private fun EditorTab(
                                     color = when {
                                         isErr -> Red400
                                         isWarn -> AccentOrange
+                                        isCheck -> AccentBlue
                                         else -> Color(0xFFA9DC76)
                                     },
                                     lineHeight = 14.sp
@@ -1342,6 +1521,93 @@ private fun EditorTab(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         Text("Consec W: ${result.maxConsecutiveWins}", fontSize = 10.sp, color = Green400)
                         Text("Consec L: ${result.maxConsecutiveLosses}", fontSize = 10.sp, color = Red400)
+                    }
+                    // ── Per-trade breakdown ──
+                    if (result.trades.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Divider(color = DarkBorder, thickness = 0.5.dp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        var showTrades by remember { mutableStateOf(false) }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showTrades = !showTrades }
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Text(
+                                "Trade Breakdown (${result.trades.size})",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp,
+                                color = TextPrimary
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            Icon(
+                                if (showTrades) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = TextTertiary
+                            )
+                        }
+                        if (showTrades) {
+                            val df = remember { java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US) }
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                Text("Entry", fontSize = 9.sp, color = TextTertiary, modifier = Modifier.weight(1.2f))
+                                Text("Side", fontSize = 9.sp, color = TextTertiary, modifier = Modifier.weight(0.6f))
+                                Text("In→Out", fontSize = 9.sp, color = TextTertiary, modifier = Modifier.weight(1.5f))
+                                Text("Reason", fontSize = 9.sp, color = TextTertiary, modifier = Modifier.weight(1.7f))
+                                Text("PnL", fontSize = 9.sp, color = TextTertiary, modifier = Modifier.weight(0.8f), textAlign = TextAlign.End)
+                            }
+                            Divider(color = DarkBorder, thickness = 0.5.dp)
+                            val shown = result.trades.takeLast(50)
+                            shown.forEach { t ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Text(
+                                        df.format(java.util.Date(t.entryTime)),
+                                        fontSize = 10.sp, color = TextSecondary,
+                                        modifier = Modifier.weight(1.2f)
+                                    )
+                                    Text(
+                                        t.side.name,
+                                        fontSize = 10.sp,
+                                        color = if (t.side == OrderSide.BUY) Green400 else Red400,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.weight(0.6f)
+                                    )
+                                    Text(
+                                        "${"%.4f".format(t.entryPrice)}→${"%.4f".format(t.exitPrice)}",
+                                        fontSize = 10.sp, color = TextPrimary,
+                                        modifier = Modifier.weight(1.5f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "${t.entryReason ?: "—"} → ${t.exitReason ?: "—"}",
+                                        fontSize = 9.sp, color = TextTertiary,
+                                        modifier = Modifier.weight(1.7f),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "${if (t.pnl >= 0) "+" else ""}${"%.2f".format(t.pnl)}",
+                                        fontSize = 10.sp,
+                                        color = if (t.pnl >= 0) Green400 else Red400,
+                                        fontWeight = FontWeight.SemiBold,
+                                        textAlign = TextAlign.End,
+                                        modifier = Modifier.weight(0.8f)
+                                    )
+                                }
+                            }
+                            if (result.trades.size > shown.size) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    "Showing last ${shown.size} of ${result.trades.size} — use Export CSV for full list",
+                                    fontSize = 9.sp, color = TextTertiary
+                                )
+                            }
+                        }
                     }
                     // ── C5: Export button ──
                     Spacer(modifier = Modifier.height(6.dp))
@@ -2169,9 +2435,36 @@ color.hexAlpha('#FF0000', 0.5)   // '#FF000080'""".trimIndent())
   // Simple TP/SL (single level)
   stopLossPct: 1.5,         // SL as % from entry
   takeProfitPct: 3.0,       // TP as % from entry
+  // Label — determines chart marker style
+  label: 'EMA_CROSS',       // green ▲ (default)
+  // label: 'PATTERN',      // cyan ▲ (PAT_BUY)
+  // Order type
+  orderType: 'MARKET',      // MARKET (default), LIMIT
   // Optional: symbol for multi-signal mode
   symbol: 'BTCUSDT'
 }""".trimIndent())
+            DocSubSection("Signal Labels & Chart Markers")
+            DocText(
+                "The label field controls how signals appear on the chart. " +
+                "Available labels and their marker styles:"
+            )
+            DocCode(mono, """
+// Chart marker types:
+// BUY        → green ▲ (arrow up below bar)
+// PAT_BUY    → cyan ▲ (when label='PATTERN')
+// SELL       → red ▼ (arrow down above bar)
+// PAT_SELL   → orange ▼ (when label='PATTERN')
+// TP_HIT     → green ● (circle above bar)
+// SL_HIT     → red ■ (square above bar)
+// CLOSE      → orange ● (strategy-triggered close)
+
+// Labels: EMA_CROSS, PATTERN, BREAKOUT,
+//         REVERSAL, SCALP, DCA, or any custom text""".trimIndent())
+            DocText(
+                "TP_HIT and SL_HIT markers are generated automatically by the " +
+                "backtest engine when your stopLossPct or takeProfitLevels fire. " +
+                "You don't need to return these — just set TP/SL on your BUY/SELL signal."
+            )
             DocSubSection("Graduated TP/SL (Multi-Level)")
             DocText(
                 "For advanced exit strategies, use takeProfitLevels and/or stopLossLevels " +
@@ -2475,6 +2768,10 @@ var STOP_LOSS = 2.0;""".trimIndent())
                 "Inside strategy(), reference the variable directly (e.g. SMA_SHORT). " +
                 "The engine also exposes a _params object with all values as strings: " +
                 "_params.SMA_SHORT === \"10\".\n\n" +
+                "For fully dynamic parameters (e.g. TP/SL that change at runtime), " +
+                "read from _params inside your strategy() function:\n" +
+                "  var SL = _params.SL_PCT != null ? Number(_params.SL_PCT) : 0.25;\n" +
+                "This ensures user edits take effect without rebuilding the JS context.\n\n" +
                 "When saving a custom template, you can add, remove, or edit params in the dialog."
             )
         }
@@ -2511,8 +2808,9 @@ Sharpe ratio:     interval-aware annualization""".trimIndent())
                 "Equity curve with chart overlay"
             ))
             DocText(
-                "Signal markers (BUY/SELL/CLOSE) are plotted on the chart automatically. " +
-                "Console logs from the backtest run appear in the Console panel."
+                "Signal markers (BUY/SELL/PAT_BUY/TP_HIT/SL_HIT/CLOSE) are plotted on the chart automatically. " +
+                "TP_HIT (green circle) and SL_HIT (red square) markers appear when take-profit or stop-loss " +
+                "levels are hit during the backtest. Console logs from the backtest run appear in the Console panel."
             )
         }
 
@@ -2791,7 +3089,7 @@ HOW IT WORKS:
 • Stepping forward reveals one more candle
 • If a strategy is loaded, it evaluates signals
   at each bar using StrategyEvaluator
-• Signal markers (BUY ▲, SELL ▼) appear on chart
+• Signal markers (BUY ▲, SELL ▼, TP ●, SL ■) appear on chart
 • Play mode auto-advances using the selected speed
 • Exit returns to full chart view""".trimIndent())
         }

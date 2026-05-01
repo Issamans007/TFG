@@ -32,9 +32,11 @@ class PlaceOrderUseCase @Inject constructor(
         }
 
         val feeConfig = feeRepository.getFeeConfig().first()
+        val notional = order.quantity * (order.price ?: 0.0) * order.leverage.coerceAtLeast(1)
         val estimatedFee = feeConfig.estimateFee(
-            order.quantity * (order.price ?: 0.0),
-            order.type == OrderType.LIMIT
+            notional,
+            order.type == OrderType.LIMIT,
+            order.marketType
         )
         val orderWithFee = order.copy(fee = estimatedFee)
 

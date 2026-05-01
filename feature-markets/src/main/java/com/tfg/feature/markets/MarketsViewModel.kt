@@ -8,6 +8,7 @@ import com.tfg.domain.repository.MarketRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 data class MarketsUiState(
@@ -60,7 +61,7 @@ class MarketsViewModel @Inject constructor(
                         }
                     }
                 } catch (e: Exception) {
-                    timber.log.Timber.e(e, "Failed to load trading pairs")
+                    Timber.e(e, "Failed to load trading pairs")
                     _state.update { it.copy(isLoading = false) }
                 }
             }
@@ -84,7 +85,7 @@ class MarketsViewModel @Inject constructor(
                         _state.update { it.copy(watchlist = watchlist.map { it.symbol }) }
                     }
                 } catch (e: Exception) {
-                    timber.log.Timber.e(e, "Failed to load watchlist")
+                    Timber.e(e, "Failed to load watchlist")
                 }
             }
 
@@ -129,25 +130,29 @@ class MarketsViewModel @Inject constructor(
         }
     }
 
-    val filteredPairs: StateFlow<List<TradingPair>> = _state.map { s ->
-        var list = s.pairs
-        if (s.searchQuery.isNotBlank()) {
-            list = list.filter {
-                it.symbol.contains(s.searchQuery, ignoreCase = true) ||
-                it.baseAsset.contains(s.searchQuery, ignoreCase = true)
+    val filteredPairs: StateFlow<List<TradingPair>> = _state
+        // Debounce only the searchQuery so list filter recomputes don't run on every keystroke;
+        // ticker / watchlist updates still flow through immediately.
+        .debounce { if (it.searchQuery.isBlank()) 0L else 200L }
+        .map { s ->
+            var list = s.pairs
+            if (s.searchQuery.isNotBlank()) {
+                list = list.filter {
+                    it.symbol.contains(s.searchQuery, ignoreCase = true) ||
+                    it.baseAsset.contains(s.searchQuery, ignoreCase = true)
+                }
             }
-        }
-        when (s.selectedTab) {
-            MarketTab.WATCHLIST -> list.filter { s.watchlist.contains(it.symbol) }
-            MarketTab.GAINERS -> {
-                list.filter { p -> s.tickers[p.symbol]?.let { it.priceChangePercent > 0 } == true }
-                    .sortedByDescending { p -> s.tickers[p.symbol]?.priceChangePercent ?: 0.0 }
+            when (s.selectedTab) {
+                MarketTab.WATCHLIST -> list.filter { s.watchlist.contains(it.symbol) }
+                MarketTab.GAINERS -> {
+                    list.filter { p -> s.tickers[p.symbol]?.let { it.priceChangePercent > 0 } == true }
+                        .sortedByDescending { p -> s.tickers[p.symbol]?.priceChangePercent ?: 0.0 }
+                }
+                MarketTab.LOSERS -> {
+                    list.filter { p -> s.tickers[p.symbol]?.let { it.priceChangePercent < 0 } == true }
+                        .sortedBy { p -> s.tickers[p.symbol]?.priceChangePercent ?: 0.0 }
+                }
+                else -> list
             }
-            MarketTab.LOSERS -> {
-                list.filter { p -> s.tickers[p.symbol]?.let { it.priceChangePercent < 0 } == true }
-                    .sortedBy { p -> s.tickers[p.symbol]?.priceChangePercent ?: 0.0 }
-            }
-            else -> list
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 }

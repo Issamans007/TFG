@@ -29,9 +29,15 @@ object Formatters {
         else -> volumeFormat.format(volume)
     }
 
-    fun formatDate(timestamp: Long): String = dateFormat.get()!!.format(Date(timestamp))
-    fun formatTime(timestamp: Long): String = timeFormat.get()!!.format(Date(timestamp))
-    fun formatDateTime(timestamp: Long): String = dateTimeFormat.get()!!.format(Date(timestamp))
+    // ThreadLocal.get() can return null if .withInitial's initializer ever
+    // throws or after a thread is detached. Fall back to a fresh formatter
+    // rather than NPE'ing the whole UI render.
+    fun formatDate(timestamp: Long): String =
+        (dateFormat.get() ?: SimpleDateFormat("dd MMM yyyy", Locale.US)).format(Date(timestamp))
+    fun formatTime(timestamp: Long): String =
+        (timeFormat.get() ?: SimpleDateFormat("HH:mm:ss", Locale.US)).format(Date(timestamp))
+    fun formatDateTime(timestamp: Long): String =
+        (dateTimeFormat.get() ?: SimpleDateFormat("dd MMM yyyy HH:mm", Locale.US)).format(Date(timestamp))
 
     fun formatUsdt(amount: Double): String = "$${priceHigh.format(amount)}"
     fun formatBtc(amount: Double): String = "${priceLow.format(amount)} BTC"

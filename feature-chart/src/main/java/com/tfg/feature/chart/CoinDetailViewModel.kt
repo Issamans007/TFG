@@ -269,6 +269,33 @@ data class CustomIndicatorLine(
     val lineWidth: Float = 1.5f
 )
 
+/** Dashboard data for TFG ALGO's 10-factor confluence scoring. */
+data class TfgDashboardData(
+    val score: Int = 0,
+    val cTrend: Boolean = false,
+    val cVwap: Boolean = false,
+    val cVolume: Boolean = false,
+    val cRsi: Boolean = false,
+    val cMacd: Boolean = false,
+    val cCandle: Boolean = false,
+    val cSupport: Boolean = false,
+    val cDi: Boolean = false,
+    val cAdx: Boolean = false,
+    val cBreakout: Boolean = false,
+    val rsiVal: Double = 0.0,
+    val adxVal: Double = 0.0,
+    val diPlus: Double = 0.0,
+    val diMinus: Double = 0.0,
+    val htfBull: Boolean = true,
+    val inPosition: Boolean = false,
+    val pnlPct: Double = 0.0,
+    val supportLevel: Double? = null,
+    val resistanceLevel: Double? = null,
+    val bullEngulf: Boolean = false,
+    val bullPinBar: Boolean = false,
+    val strongBull: Boolean = false
+)
+
 data class CoinDetailUiState(
     val symbol: String = "",
     val candles: List<Candle> = emptyList(),
@@ -353,7 +380,14 @@ data class CoinDetailUiState(
     val replayBarIndex: Int = 0,
     val replayPlaying: Boolean = false,
     val replaySpeedMs: Long = 500L,
-    val replaySignals: List<SignalMarker> = emptyList()
+    val replaySignals: List<SignalMarker> = emptyList(),
+    // TFG ALGO dashboard
+    val tfgDashboard: TfgDashboardData? = null,
+    // Strategy overlay data for chart WebView
+    val strategyPlotJson: String? = null,
+    val dashboardOverlayJson: String? = null,
+    // When true, loadSignalMarkers() skips DB updates to preserve backtest markers
+    val isBacktestActive: Boolean = false
 )
 
 @HiltViewModel
@@ -362,7 +396,8 @@ class CoinDetailViewModel @Inject constructor(
     private val marketRepository: MarketRepository,
     private val scriptRepository: ScriptRepository,
     private val indicatorRepository: IndicatorRepository,
-    private val indicatorExecutor: IndicatorExecutor
+    private val indicatorExecutor: IndicatorExecutor,
+    private val scriptExecutor: ScriptExecutor
 ) : ViewModel() {
 
     private val symbol: String = savedStateHandle["symbol"] ?: "BTCUSDT"
@@ -371,6 +406,8 @@ class CoinDetailViewModel @Inject constructor(
     val state: StateFlow<CoinDetailUiState> = _state
 
     private var livePreviewJob: Job? = null
+    private var candleJob: Job? = null
+    private var markerJob: Job? = null
 
     init {
         loadData()
@@ -380,8 +417,9 @@ class CoinDetailViewModel @Inject constructor(
     }
 
     fun changeInterval(interval: String) {
-        _state.update { it.copy(interval = interval) }
+        _state.update { it.copy(interval = interval, isBacktestActive = false, backtestResult = null) }
         loadCandles()
+        loadSignalMarkers()
     }
 
     // ─── Indicator toggles (long-press = open settings) ─────────────
@@ -663,30 +701,10 @@ class CoinDetailViewModel @Inject constructor(
                         _state.update { it.copy(backtestProgress = progress) }
                     }
                 )
-                // Generate signal markers from backtest trades for chart overlay
-                val markers = result.trades.flatMap { trade ->
-                    listOfNotNull(
-                        SignalMarker(
-                            id = "bt_entry_${trade.entryTime}",
-                            scriptId = tempId,
-                            symbol = symbol,
-                            interval = _state.value.interval,
-                            openTime = trade.entryTime,
-                            signalType = if (trade.side == OrderSide.BUY) SignalType.BUY else SignalType.SELL,
-                            price = trade.entryPrice
-                        ),
-                        if (trade.exitTime > 0) SignalMarker(
-                            id = "bt_exit_${trade.exitTime}",
-                            scriptId = tempId,
-                            symbol = symbol,
-                            interval = _state.value.interval,
-                            openTime = trade.exitTime,
-                            signalType = SignalType.CLOSE,
-                            price = trade.exitPrice
-                        ) else null
-                    )
-                }
-                _state.update { it.copy(backtestResult = result, isBacktesting = false, backtestSignalMarkers = markers, signalMarkers = markers) }
+                // Load actual signal markers from DB (backtest already persisted them with proper types: BUY, PAT_BUY, TP_HIT, SL_HIT, CLOSE)
+                val markers = scriptRepository.getSignalMarkers(symbol, _state.value.interval).first()
+                _state.update { it.copy(backtestResult = result, isBacktesting = false, backtestSignalMarkers = markers, signalMarkers = markers, isBacktestActive = true) }
+                refreshTfgDashboard()
                 // Reload candles from DB (backtest already stored them) — don't re-fetch from API
                 loadBacktestCandles()
             } catch (e: Exception) {
@@ -717,7 +735,8 @@ class CoinDetailViewModel @Inject constructor(
     }
 
     private fun loadCandles() {
-        viewModelScope.launch {
+        candleJob?.cancel()
+        candleJob = viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
             try {
                 marketRepository.getCandles(symbol, _state.value.interval, 500)
@@ -725,6 +744,7 @@ class CoinDetailViewModel @Inject constructor(
                         _state.update { it.copy(candles = candles, isLoading = false) }
                         recomputeCustomIndicators()
                         recomputeIndicatorOutputs()
+                        refreshTfgDashboard()
                     }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to load candles for $symbol")
@@ -734,7 +754,8 @@ class CoinDetailViewModel @Inject constructor(
     }
 
     private fun loadBacktestCandles() {
-        viewModelScope.launch {
+        candleJob?.cancel()
+        candleJob = viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
             try {
                 marketRepository.getCandlesFromDb(symbol, _state.value.interval)
@@ -742,6 +763,7 @@ class CoinDetailViewModel @Inject constructor(
                         _state.update { it.copy(candles = candles, isLoading = false) }
                         recomputeCustomIndicators()
                         recomputeIndicatorOutputs()
+                        refreshTfgDashboard()
                     }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to load backtest candles for $symbol")
@@ -751,16 +773,124 @@ class CoinDetailViewModel @Inject constructor(
     }
 
     private fun loadSignalMarkers() {
-        viewModelScope.launch {
+        markerJob?.cancel()
+        markerJob = viewModelScope.launch {
             try {
                 scriptRepository.getSignalMarkers(symbol, _state.value.interval)
                     .collect { markers ->
-                        _state.update { it.copy(signalMarkers = markers) }
+                        // Don't overwrite backtest-generated markers with DB markers
+                        if (!_state.value.isBacktestActive) {
+                            _state.update { it.copy(signalMarkers = markers) }
+                        }
                     }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to load signal markers")
             }
         }
+    }
+
+    /** Evaluate strategy on current candles to populate plot overlays and the dashboard score panel. */
+    private fun refreshTfgDashboard() {
+        val s = _state.value
+        if (s.selectedTemplateId == null) {
+            if (s.tfgDashboard != null || s.strategyPlotJson != null || s.dashboardOverlayJson != null) {
+                _state.update { it.copy(tfgDashboard = null, strategyPlotJson = null, dashboardOverlayJson = null) }
+            }
+            return
+        }
+        val candles = s.candles
+        if (candles.size < 60) return
+        viewModelScope.launch {
+            try {
+                val code = s.scriptCode.ifBlank {
+                    StrategyTemplates.getAll().firstOrNull { it.id == s.selectedTemplateId }?.code ?: return@launch
+                }
+                scriptExecutor.evaluate(code, candles, s.scriptParams)
+
+                // Capture strategy plot data (overlays/panels plotted via plot() API)
+                val plotJson = scriptExecutor.getLastPlotData()
+
+                // Dashboard — only TFG ALGO has a structured dashboard
+                if (s.selectedTemplateId == StrategyTemplateId.TFG_ALGO) {
+                    val json = scriptExecutor.getLastDashboard()
+                    val dash = if (json != null) parseTfgDashboard(json) else null
+                    _state.update { it.copy(
+                        tfgDashboard = dash,
+                        strategyPlotJson = plotJson,
+                        dashboardOverlayJson = if (dash != null) buildDashboardOverlayJson(dash) else null
+                    )}
+                } else {
+                    _state.update { it.copy(
+                        tfgDashboard = null,
+                        strategyPlotJson = plotJson,
+                        dashboardOverlayJson = null
+                    )}
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to refresh strategy overlay")
+            }
+        }
+    }
+
+    private fun parseTfgDashboard(json: String): TfgDashboardData? {
+        return try {
+            val obj = org.json.JSONObject(json)
+            TfgDashboardData(
+                score = obj.optInt("score", 0),
+                cTrend = obj.optInt("c_trend") == 1,
+                cVwap = obj.optInt("c_vwap") == 1,
+                cVolume = obj.optInt("c_volume") == 1,
+                cRsi = obj.optInt("c_rsi") == 1,
+                cMacd = obj.optInt("c_macd") == 1,
+                cCandle = obj.optInt("c_candle") == 1,
+                cSupport = obj.optInt("c_support") == 1,
+                cDi = obj.optInt("c_di") == 1,
+                cAdx = obj.optInt("c_adx") == 1,
+                cBreakout = obj.optInt("c_breakout") == 1,
+                rsiVal = obj.optDouble("rsiVal", 0.0),
+                adxVal = obj.optDouble("adxVal", 0.0),
+                diPlus = obj.optDouble("diPlus", 0.0),
+                diMinus = obj.optDouble("diMinus", 0.0),
+                htfBull = obj.optInt("htfBull", 1) == 1,
+                inPosition = obj.optInt("inPosition") == 1,
+                pnlPct = obj.optDouble("pnlPct", 0.0),
+                supportLevel = if (obj.has("supportLevel") && !obj.isNull("supportLevel")) obj.optDouble("supportLevel") else null,
+                resistanceLevel = if (obj.has("resistanceLevel") && !obj.isNull("resistanceLevel")) obj.optDouble("resistanceLevel") else null,
+                bullEngulf = obj.optInt("bullEngulf") == 1,
+                bullPinBar = obj.optInt("bullPinBar") == 1,
+                strongBull = obj.optInt("strongBull") == 1
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to parse TFG dashboard JSON")
+            null
+        }
+    }
+
+    /** Convert TfgDashboardData into the JSON format the chart WebView overlay expects. */
+    private fun buildDashboardOverlayJson(dash: TfgDashboardData): String {
+        val rows = org.json.JSONArray()
+        fun addRow(label: String, pass: Boolean, status: String) {
+            rows.put(org.json.JSONObject().put("label", label).put("pass", pass).put("status", status))
+        }
+        addRow("Trend", dash.cTrend, if (dash.cTrend) "Bullish" else "Bearish")
+        addRow("VWAP", dash.cVwap, if (dash.cVwap) "Above" else "Below")
+        addRow("Volume", dash.cVolume, if (dash.cVolume) "Strong" else "Weak")
+        addRow("RSI", dash.cRsi, String.format("%.1f", dash.rsiVal))
+        addRow("MACD", dash.cMacd, if (dash.cMacd) "Bullish" else "Bearish")
+        addRow("Candle", dash.cCandle, if (dash.cCandle) "Bullish" else "Neutral")
+        addRow("Support", dash.cSupport, if (dash.cSupport) "Near" else "Away")
+        addRow("DI+/DI-", dash.cDi, String.format("%.1f/%.1f", dash.diPlus, dash.diMinus))
+        addRow("ADX", dash.cAdx, String.format("%.1f", dash.adxVal))
+        addRow("Breakout", dash.cBreakout, if (dash.cBreakout) "Yes" else "No")
+        return org.json.JSONObject().apply {
+            put("title", "TFG ALGO")
+            put("score", dash.score)
+            put("maxScore", 10)
+            put("rows", rows)
+            put("inPosition", dash.inPosition)
+            put("pnlPct", dash.pnlPct)
+            put("htfBull", dash.htfBull)
+        }.toString()
     }
 
     private fun loadCustomIndicators() {

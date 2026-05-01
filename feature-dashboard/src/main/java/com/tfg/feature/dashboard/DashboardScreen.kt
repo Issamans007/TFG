@@ -25,6 +25,8 @@ import com.tfg.core.util.Formatters
 import com.tfg.domain.model.DashboardCardType
 import com.tfg.domain.model.Signal
 import com.tfg.domain.model.SignalStatus
+import com.tfg.domain.service.ConsoleEvent
+import com.tfg.domain.service.ConsoleSeverity
 
 @Composable
 fun DashboardScreen(
@@ -149,6 +151,11 @@ fun DashboardScreen(
                         DashboardCardType.DONATION_PROGRESS -> DonationCard(state)
                     }
                 }
+            }
+
+            // Live console preview (always shown — taps open the full Console)
+            item(key = "live_console_preview") {
+                LiveConsolePreviewCard(state.recentConsoleEvents, onNavigateToConsole)
             }
 
             // Error
@@ -451,3 +458,103 @@ private fun SignalCard(signal: Signal, onClick: () -> Unit) {
         Text("Confidence: ${String.format("%.0f", signal.confidence * 100)}%", fontSize = 12.sp, color = TextSecondary)
     }
 }
+
+// ─── Live console preview (home page) ───────────────────────────────
+
+@Composable
+private fun LiveConsolePreviewCard(
+    events: List<ConsoleEvent>,
+    onNavigateToConsole: () -> Unit
+) {
+    val timeFormat = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(DarkSurface)
+            .clickable { onNavigateToConsole() }
+            .padding(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.Terminal,
+                contentDescription = null,
+                tint = AccentBlue,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                "Live Console",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                "Tap for full view ›",
+                fontSize = 11.sp,
+                color = AccentBlue
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        if (events.isEmpty()) {
+            Text(
+                "No events yet — run a backtest or start the bot.",
+                fontSize = 11.sp,
+                color = TextTertiary
+            )
+        } else {
+            events.take(5).forEach { ev ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        timeFormat.format(java.util.Date(ev.timestamp)),
+                        fontSize = 10.sp,
+                        color = TextTertiary,
+                        modifier = Modifier.width(56.dp)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .size(6.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(severityDotColor(ev.severity))
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            ev.title,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = severityDotColor(ev.severity),
+                            maxLines = 1
+                        )
+                        if (ev.message.isNotBlank()) {
+                            Text(
+                                ev.message,
+                                fontSize = 10.sp,
+                                color = TextSecondary,
+                                maxLines = 2
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun severityDotColor(s: ConsoleSeverity): androidx.compose.ui.graphics.Color = when (s) {
+    ConsoleSeverity.DEBUG -> TextTertiary
+    ConsoleSeverity.INFO -> AccentBlue
+    ConsoleSeverity.SUCCESS -> Green500
+    ConsoleSeverity.WARNING -> AccentOrange
+    ConsoleSeverity.ERROR -> Red500
+}
+
+

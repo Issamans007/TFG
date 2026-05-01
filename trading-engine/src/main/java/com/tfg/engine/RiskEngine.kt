@@ -24,28 +24,51 @@ class RiskEngine @Inject constructor(
         const val KEY_CONSECUTIVE_LOSSES = "consecutive_losses"
         const val KEY_PEAK_EQUITY = "peak_equity"
         const val KEY_LAST_RESET_DAY = "last_reset_day"
+        /** Maximum allowed age for cachedPortfolio before risk checks must reject. */
+        const val MAX_PORTFOLIO_AGE_MS = 30_000L
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val _config = MutableStateFlow(RiskConfig())
     private val _killSwitch = MutableStateFlow(prefs.getBoolean(KEY_KILL_SWITCH, false))
-    private var dailyLoss = prefs.getFloat(KEY_DAILY_LOSS, 0f).toDouble()
+    // Money stored as String-encoded BigDecimal: SharedPreferences only has
+    // Float/Long primitives, and Float.MAX precision (~7 sig figs) loses cents
+    // on accounts > ~$1M. Read existing Float-encoded values once for migration.
+    private fun loadDoubleMoney(key: String): Double {
+        val asString = prefs.getString(key, null)
+        if (asString != null) return asString.toBigDecimalOrNull()?.toDouble() ?: 0.0
+        // Legacy Float fallback (will be re-persisted as String on next write).
+        return runCatching { prefs.getFloat(key, 0f).toDouble() }.getOrDefault(0.0)
+    }
+
+    private var dailyLoss = loadDoubleMoney(KEY_DAILY_LOSS)
     private var openTradeCount = 0
     private var consecutiveLosses = prefs.getInt(KEY_CONSECUTIVE_LOSSES, 0)
-    private var peakEquity = prefs.getFloat(KEY_PEAK_EQUITY, 0f).toDouble()
+    private var peakEquity = loadDoubleMoney(KEY_PEAK_EQUITY)
     private var cachedPortfolio = Portfolio()
+    @Volatile private var cachedPortfolioTimestampMs: Long = 0L
     private var lastAtrPercent = 0.0
 
     init {
-        // Auto-reset daily counters if the day changed since last save
-        val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
+        // Auto-reset daily counters if the day changed since last save.
+        // Use UTC because Binance daily limits reset at 00:00 UTC; using local
+        // time would either grant a fresh limit mid-trading-day after travel
+        // or, conversely, reset hours before the exchange does.
+        val today = utcDayOfYear()
         val savedDay = prefs.getInt(KEY_LAST_RESET_DAY, -1)
         if (savedDay != -1 && savedDay != today) {
             dailyLoss = 0.0
             consecutiveLosses = 0
             persistRiskState()
         }
+    }
+
+    private fun utcDayOfYear(): Int {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        // Encode year * 1000 + day so a year rollover (Dec 31 → Jan 1) still
+        // triggers a reset rather than matching the previous January.
+        return cal.get(java.util.Calendar.YEAR) * 1000 + cal.get(java.util.Calendar.DAY_OF_YEAR)
     }
 
     // Observable state for UI
@@ -59,6 +82,7 @@ class RiskEngine @Inject constructor(
     /** Push real portfolio so risk checks use actual balances instead of zeros. */
     fun updatePortfolio(portfolio: Portfolio) {
         cachedPortfolio = portfolio
+        cachedPortfolioTimestampMs = System.currentTimeMillis()
         updateEquity(portfolio.totalBalance)
     }
 
@@ -174,28 +198,39 @@ class RiskEngine @Inject constructor(
             val now = java.util.Calendar.getInstance()
             val currentMinutes = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
 
-            fun parseMinutes(hhmm: String): Int {
-                val parts = hhmm.split(":")
-                return parts[0].toInt() * 60 + parts[1].toInt()
+            fun parseMinutes(hhmm: String): Int? {
+                // Tolerate malformed config (saved by older builds, manually edited
+                // prefs, etc.) instead of crashing the whole risk check.
+                return try {
+                    val parts = hhmm.split(":")
+                    if (parts.size != 2) return null
+                    val h = parts[0].toIntOrNull() ?: return null
+                    val m = parts[1].toIntOrNull() ?: return null
+                    if (h !in 0..23 || m !in 0..59) null else h * 60 + m
+                } catch (_: Exception) { null }
             }
 
             val startMinutes = parseMinutes(config.tradingWindowStart!!)
             val endMinutes = parseMinutes(config.tradingWindowEnd!!)
 
-            val insideWindow = if (startMinutes <= endMinutes) {
-                // Normal window, e.g. 09:00-17:00
-                currentMinutes in startMinutes..endMinutes
-            } else {
-                // Overnight window, e.g. 23:00-01:00
-                currentMinutes >= startMinutes || currentMinutes <= endMinutes
-            }
+            // Bad config = skip the time-window restriction rather than block
+            // every trade outright; the rest of the risk checks still apply.
+            if (startMinutes != null && endMinutes != null) {
+                val insideWindow = if (startMinutes <= endMinutes) {
+                    // Normal window, e.g. 09:00-17:00
+                    currentMinutes in startMinutes..endMinutes
+                } else {
+                    // Overnight window, e.g. 23:00-01:00
+                    currentMinutes >= startMinutes || currentMinutes <= endMinutes
+                }
 
-            if (!insideWindow) {
-                violations.add(RiskViolation(
-                    "TRADING_WINDOW",
-                    "Outside trading window (${config.tradingWindowStart}-${config.tradingWindowEnd})",
-                    RiskSeverity.BLOCK
-                ))
+                if (!insideWindow) {
+                    violations.add(RiskViolation(
+                        "TRADING_WINDOW",
+                        "Outside trading window (${config.tradingWindowStart}-${config.tradingWindowEnd})",
+                        RiskSeverity.BLOCK
+                    ))
+                }
             }
         }
 
@@ -220,8 +255,59 @@ class RiskEngine @Inject constructor(
             ))
         }
 
+        // Pre-trade balance check — fail BEFORE the exchange does.
+        // Submitting an order Binance will reject (e.g. insufficient USDT for
+        // a BUY) burns rate-limit and produces noisy error logs. Catch it here.
+        if (!order.isPaperTrade && effectivePrice > 0.0) {
+            val notional = orderNotional
+            when (order.marketType) {
+                MarketType.SPOT -> {
+                    val (base, quote) = splitSpotSymbol(order.symbol)
+                    val needAsset = if (order.side == OrderSide.BUY) quote else base
+                    val needAmount = if (order.side == OrderSide.BUY) notional else order.quantity
+                    val free = portfolio.assets
+                        .firstOrNull { it.asset.equals(needAsset, ignoreCase = true) }
+                        ?.free ?: 0.0
+                    if (needAmount > 0 && free < needAmount) {
+                        violations.add(RiskViolation(
+                            "INSUFFICIENT_BALANCE",
+                            "Need ${String.format("%.6f", needAmount)} $needAsset but only ${String.format("%.6f", free)} free",
+                            RiskSeverity.BLOCK
+                        ))
+                    }
+                }
+                MarketType.FUTURES_USDM -> {
+                    // Futures uses USDT margin. Required margin = notional / leverage.
+                    val lev = (order.leverage.takeIf { it > 0 } ?: 1).coerceAtLeast(1)
+                    val required = notional / lev
+                    val freeUsdt = portfolio.availableBalance.takeIf { it > 0 }
+                        ?: portfolio.assets.firstOrNull { it.asset.equals("USDT", ignoreCase = true) }?.free
+                        ?: 0.0
+                    if (required > 0 && freeUsdt < required) {
+                        violations.add(RiskViolation(
+                            "INSUFFICIENT_MARGIN",
+                            "Need ${String.format("%.2f", required)} USDT margin (notional=${String.format("%.2f", notional)}, leverage=${lev}x) but only ${String.format("%.2f", freeUsdt)} free",
+                            RiskSeverity.BLOCK
+                        ))
+                    }
+                }
+                else -> { /* paper / unsupported */ }
+            }
+        }
+
         val hasBlocker = violations.any { it.severity == RiskSeverity.BLOCK || it.severity == RiskSeverity.EMERGENCY }
         return RiskCheckResult(!hasBlocker, violations)
+    }
+
+    /** Split a Binance spot symbol like BTCUSDT → ("BTC","USDT"). Falls back to ("","") on unknown quote. */
+    private fun splitSpotSymbol(symbol: String): Pair<String, String> {
+        // Order matters: longer suffixes first so "FDUSD" is matched before "USD".
+        val quotes = listOf("USDT", "FDUSD", "BUSD", "USDC", "TUSD", "DAI", "BTC", "ETH", "BNB", "EUR", "GBP", "TRY", "USD")
+        val up = symbol.uppercase()
+        for (q in quotes) {
+            if (up.endsWith(q) && up.length > q.length) return up.removeSuffix(q) to q
+        }
+        return "" to ""
     }
 
     override suspend fun activateKillSwitch() {
@@ -267,17 +353,34 @@ class RiskEngine @Inject constructor(
     }
 
     private fun persistRiskState() {
-        val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
+        val today = utcDayOfYear()
         prefs.edit()
-            .putFloat(KEY_DAILY_LOSS, dailyLoss.toFloat())
+            .putString(KEY_DAILY_LOSS, dailyLoss.toBigDecimal().toPlainString())
             .putInt(KEY_CONSECUTIVE_LOSSES, consecutiveLosses)
-            .putFloat(KEY_PEAK_EQUITY, peakEquity.toFloat())
+            .putString(KEY_PEAK_EQUITY, peakEquity.toBigDecimal().toPlainString())
             .putInt(KEY_LAST_RESET_DAY, today)
             .apply()
     }
 
     // Alias for backwards compatibility — uses cached real portfolio
     suspend fun checkPreTrade(order: Order): RiskCheckResult {
+        // Fail-closed if cachedPortfolio is missing or stale — we must NOT
+        // approve trades against a 0-balance default or a snapshot from
+        // minutes ago that may no longer reflect available margin.
+        val age = System.currentTimeMillis() - cachedPortfolioTimestampMs
+        if (cachedPortfolioTimestampMs == 0L || age > MAX_PORTFOLIO_AGE_MS) {
+            Timber.w("checkPreTrade: cachedPortfolio stale (age=${age}ms) — blocking order")
+            return RiskCheckResult(
+                allowed = false,
+                violations = listOf(
+                    RiskViolation(
+                        "STALE_PORTFOLIO",
+                        "Portfolio snapshot stale (${age}ms). Refresh and retry.",
+                        RiskSeverity.BLOCK
+                    )
+                )
+            )
+        }
         return checkOrderRisk(order, cachedPortfolio)
     }
 

@@ -24,7 +24,13 @@ object EntityMapper {
         fee = fee, feeAsset = feeAsset, donationAmount = donationAmount,
         realizedPnl = realizedPnl, slippage = slippage, isPaperTrade = isPaperTrade,
         createdAt = createdAt, updatedAt = updatedAt, executedAt = executedAt,
-        closedAt = closedAt, binanceOrderId = binanceOrderId, errorMessage = errorMessage
+        closedAt = closedAt, binanceOrderId = binanceOrderId, errorMessage = errorMessage,
+        marketType = runCatching { MarketType.valueOf(marketType) }.getOrDefault(MarketType.SPOT),
+        leverage = leverage,
+        marginType = runCatching { MarginType.valueOf(marginType) }.getOrDefault(MarginType.ISOLATED),
+        positionSide = runCatching { PositionSide.valueOf(positionSide) }.getOrDefault(PositionSide.BOTH),
+        reduceOnly = reduceOnly,
+        closePosition = closePosition
     )
 
     fun Order.toEntity(): OrderEntity = OrderEntity(
@@ -41,7 +47,13 @@ object EntityMapper {
         fee = fee, feeAsset = feeAsset, donationAmount = donationAmount,
         realizedPnl = realizedPnl, slippage = slippage, isPaperTrade = isPaperTrade,
         createdAt = createdAt, updatedAt = updatedAt, executedAt = executedAt,
-        closedAt = closedAt, binanceOrderId = binanceOrderId, errorMessage = errorMessage
+        closedAt = closedAt, binanceOrderId = binanceOrderId, errorMessage = errorMessage,
+        marketType = marketType.name,
+        leverage = leverage,
+        marginType = marginType.name,
+        positionSide = positionSide.name,
+        reduceOnly = reduceOnly,
+        closePosition = closePosition
     )
 
     fun SignalEntity.toDomain(): Signal = Signal(
@@ -149,13 +161,13 @@ object EntityMapper {
     fun SignalMarkerEntity.toDomain(): SignalMarker = SignalMarker(
         id = id, scriptId = scriptId, symbol = symbol, interval = interval,
         openTime = openTime, signalType = SignalType.valueOf(signalType),
-        price = price, timestamp = timestamp
+        price = price, label = label, orderType = orderType, timestamp = timestamp
     )
 
     fun SignalMarker.toEntity(): SignalMarkerEntity = SignalMarkerEntity(
         id = id, scriptId = scriptId, symbol = symbol, interval = interval,
         openTime = openTime, signalType = signalType.name,
-        price = price, timestamp = timestamp
+        price = price, label = label, orderType = orderType, timestamp = timestamp
     )
 
     fun CustomTemplateEntity.toDomain(): CustomTemplate = CustomTemplate(

@@ -112,10 +112,10 @@ public class TfgDatabase_Impl : TfgDatabase() {
   }
 
   protected override fun createOpenDelegate(): RoomOpenDelegate {
-    val _openDelegate: RoomOpenDelegate = object : RoomOpenDelegate(9,
-        "d86b9d3f4cc453d7aff4b57b59047ba9", "b77a9d37a8b23e86fee4c884a15397cf") {
+    val _openDelegate: RoomOpenDelegate = object : RoomOpenDelegate(11,
+        "51f59f9f55ba83159f7904b667f68453", "8ae6537d23003c5718dbd0ce9f353ff5") {
       public override fun createAllTables(connection: SQLiteConnection) {
-        connection.execSQL("CREATE TABLE IF NOT EXISTS `orders` (`id` TEXT NOT NULL, `signalId` TEXT, `symbol` TEXT NOT NULL, `side` TEXT NOT NULL, `type` TEXT NOT NULL, `status` TEXT NOT NULL, `executionMode` TEXT NOT NULL, `quantity` REAL NOT NULL, `price` REAL, `stopPrice` REAL, `takeProfitsJson` TEXT NOT NULL, `stopLossesJson` TEXT NOT NULL, `trailingStopPercent` REAL, `trailingStopActivationPrice` REAL, `ocoLinkedOrderId` TEXT, `bracketParentId` TEXT, `timeInForce` TEXT NOT NULL, `scheduledAt` INTEGER, `filledQuantity` REAL NOT NULL, `filledPrice` REAL NOT NULL, `fee` REAL NOT NULL, `feeAsset` TEXT NOT NULL, `donationAmount` REAL NOT NULL, `realizedPnl` REAL NOT NULL, `slippage` REAL NOT NULL, `isPaperTrade` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `executedAt` INTEGER, `closedAt` INTEGER, `binanceOrderId` INTEGER, `errorMessage` TEXT, PRIMARY KEY(`id`))")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `orders` (`id` TEXT NOT NULL, `signalId` TEXT, `symbol` TEXT NOT NULL, `side` TEXT NOT NULL, `type` TEXT NOT NULL, `status` TEXT NOT NULL, `executionMode` TEXT NOT NULL, `quantity` REAL NOT NULL, `price` REAL, `stopPrice` REAL, `takeProfitsJson` TEXT NOT NULL, `stopLossesJson` TEXT NOT NULL, `trailingStopPercent` REAL, `trailingStopActivationPrice` REAL, `ocoLinkedOrderId` TEXT, `bracketParentId` TEXT, `timeInForce` TEXT NOT NULL, `scheduledAt` INTEGER, `filledQuantity` REAL NOT NULL, `filledPrice` REAL NOT NULL, `fee` REAL NOT NULL, `feeAsset` TEXT NOT NULL, `donationAmount` REAL NOT NULL, `realizedPnl` REAL NOT NULL, `slippage` REAL NOT NULL, `isPaperTrade` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `executedAt` INTEGER, `closedAt` INTEGER, `binanceOrderId` INTEGER, `errorMessage` TEXT, `marketType` TEXT NOT NULL, `leverage` INTEGER NOT NULL, `marginType` TEXT NOT NULL, `positionSide` TEXT NOT NULL, `reduceOnly` INTEGER NOT NULL, `closePosition` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE INDEX IF NOT EXISTS `index_orders_status` ON `orders` (`status`)")
         connection.execSQL("CREATE INDEX IF NOT EXISTS `index_orders_symbol` ON `orders` (`symbol`)")
         connection.execSQL("CREATE INDEX IF NOT EXISTS `index_orders_signalId` ON `orders` (`signalId`)")
@@ -131,12 +131,12 @@ public class TfgDatabase_Impl : TfgDatabase() {
         connection.execSQL("CREATE TABLE IF NOT EXISTS `donations` (`id` TEXT NOT NULL, `orderId` TEXT NOT NULL, `amount` REAL NOT NULL, `currency` TEXT NOT NULL, `ngoName` TEXT NOT NULL, `ngoId` TEXT NOT NULL, `status` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `scripts` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `code` TEXT NOT NULL, `isActive` INTEGER NOT NULL, `activeSymbol` TEXT, `strategyTemplateId` TEXT, `paramsJson` TEXT, `lastRun` INTEGER, `backtestResultJson` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `offline_queue` (`id` TEXT NOT NULL, `signalJson` TEXT, `orderJson` TEXT, `action` TEXT NOT NULL, `priority` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `retryCount` INTEGER NOT NULL, `maxRetries` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`id`))")
-        connection.execSQL("CREATE TABLE IF NOT EXISTS `signal_markers` (`id` TEXT NOT NULL, `scriptId` TEXT NOT NULL, `symbol` TEXT NOT NULL, `interval` TEXT NOT NULL, `openTime` INTEGER NOT NULL, `signalType` TEXT NOT NULL, `price` REAL NOT NULL, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `signal_markers` (`id` TEXT NOT NULL, `scriptId` TEXT NOT NULL, `symbol` TEXT NOT NULL, `interval` TEXT NOT NULL, `openTime` INTEGER NOT NULL, `signalType` TEXT NOT NULL, `price` REAL NOT NULL, `label` TEXT NOT NULL, `orderType` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `custom_templates` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `description` TEXT NOT NULL, `baseTemplateId` TEXT NOT NULL, `code` TEXT NOT NULL, `defaultParamsJson` TEXT, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `alerts` (`id` TEXT NOT NULL, `symbol` TEXT NOT NULL, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `condition` TEXT NOT NULL, `targetValue` REAL NOT NULL, `secondaryValue` REAL, `interval` TEXT NOT NULL, `isEnabled` INTEGER NOT NULL, `isRepeating` INTEGER NOT NULL, `repeatIntervalSec` INTEGER NOT NULL, `lastTriggeredAt` INTEGER, `triggerCount` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `indicators` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `code` TEXT NOT NULL, `isEnabled` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)")
-        connection.execSQL("INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd86b9d3f4cc453d7aff4b57b59047ba9')")
+        connection.execSQL("INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '51f59f9f55ba83159f7904b667f68453')")
       }
 
       public override fun dropAllTables(connection: SQLiteConnection) {
@@ -238,6 +238,18 @@ public class TfgDatabase_Impl : TfgDatabase() {
             null, TableInfo.CREATED_FROM_ENTITY))
         _columnsOrders.put("errorMessage", TableInfo.Column("errorMessage", "TEXT", false, 0, null,
             TableInfo.CREATED_FROM_ENTITY))
+        _columnsOrders.put("marketType", TableInfo.Column("marketType", "TEXT", true, 0, null,
+            TableInfo.CREATED_FROM_ENTITY))
+        _columnsOrders.put("leverage", TableInfo.Column("leverage", "INTEGER", true, 0, null,
+            TableInfo.CREATED_FROM_ENTITY))
+        _columnsOrders.put("marginType", TableInfo.Column("marginType", "TEXT", true, 0, null,
+            TableInfo.CREATED_FROM_ENTITY))
+        _columnsOrders.put("positionSide", TableInfo.Column("positionSide", "TEXT", true, 0, null,
+            TableInfo.CREATED_FROM_ENTITY))
+        _columnsOrders.put("reduceOnly", TableInfo.Column("reduceOnly", "INTEGER", true, 0, null,
+            TableInfo.CREATED_FROM_ENTITY))
+        _columnsOrders.put("closePosition", TableInfo.Column("closePosition", "INTEGER", true, 0,
+            null, TableInfo.CREATED_FROM_ENTITY))
         val _foreignKeysOrders: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
         val _indicesOrders: MutableSet<TableInfo.Index> = mutableSetOf()
         _indicesOrders.add(TableInfo.Index("index_orders_status", false, listOf("status"),
@@ -603,6 +615,10 @@ public class TfgDatabase_Impl : TfgDatabase() {
         _columnsSignalMarkers.put("signalType", TableInfo.Column("signalType", "TEXT", true, 0,
             null, TableInfo.CREATED_FROM_ENTITY))
         _columnsSignalMarkers.put("price", TableInfo.Column("price", "REAL", true, 0, null,
+            TableInfo.CREATED_FROM_ENTITY))
+        _columnsSignalMarkers.put("label", TableInfo.Column("label", "TEXT", true, 0, null,
+            TableInfo.CREATED_FROM_ENTITY))
+        _columnsSignalMarkers.put("orderType", TableInfo.Column("orderType", "TEXT", true, 0, null,
             TableInfo.CREATED_FROM_ENTITY))
         _columnsSignalMarkers.put("timestamp", TableInfo.Column("timestamp", "INTEGER", true, 0,
             null, TableInfo.CREATED_FROM_ENTITY))

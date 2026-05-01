@@ -1,0 +1,434 @@
+//@version=5
+strategy("Spot Scalper v6 — Precision", overlay=true,
+     margin_long=100,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     pyramiding=0, calc_on_every_tick=false,
+     slippage=2, commission_type=strategy.commission.percent, commission_value=0.1,
+     process_orders_on_close=false, max_bars_back=500)
+
+// ============================================================
+//  SPOT SCALP — LONG ONLY — NON-REPAINTING
+//
+//  Built for: 1m / 3m / 5m charts on liquid pairs (BTC, ETH, BNB)
+//
+//  Non-repaint: calc_on_every_tick=false, process_orders_on_close=false,
+//  request.security with [1] + lookahead_off. All signals on bar close.
+//
+//  Risk: percentage-based SL/TP (0.1-0.5%), 1-2% capital risk per trade
+//  Commission: 0.1% (typical spot maker/taker)
+// ============================================================
+
+// ===========================
+//  1. INPUTS
+// ===========================
+
+// -- Capital & Risk --
+riskPct     = input.float(1.5, "Risk % of Capital Per Trade", minval=0.1, maxval=5.0, step=0.1, group="Risk Management")
+slPct       = input.float(0.25, "Stop Loss %",     minval=0.05, maxval=1.0, step=0.05, group="Risk Management")
+tp1Pct      = input.float(0.3,  "TP1 % (partial)", minval=0.1,  maxval=2.0, step=0.05, group="Risk Management")
+tp2Pct      = input.float(0.5,  "TP2 % (full)",    minval=0.1,  maxval=3.0, step=0.1,  group="Risk Management")
+tp1ClosePct = input.int(50,     "TP1 Close % of Position", minval=10, maxval=90, group="Risk Management")
+useTrail    = input.bool(true,  "Enable Trailing Stop",     group="Risk Management")
+trailPct    = input.float(0.2,  "Trailing Stop %",          minval=0.05, maxval=1.0, step=0.05, group="Risk Management")
+
+// -- Moving Averages --
+emaFastLen  = input.int(9,   "Fast EMA",   minval=2,  group="Moving Averages")
+emaSlowLen  = input.int(21,  "Slow EMA",   minval=5,  group="Moving Averages")
+emaTrendLen = input.int(50,  "Trend EMA",  minval=10, group="Moving Averages")
+
+// -- RSI --
+rsiLen      = input.int(7,  "RSI Length",     minval=2, group="RSI")
+rsiOB       = input.int(75, "RSI Overbought", group="RSI")
+rsiOS       = input.int(30, "RSI Oversold",   group="RSI")
+
+// -- MACD --
+macdFast    = input.int(8,  "MACD Fast",   group="MACD")
+macdSlow    = input.int(21, "MACD Slow",   group="MACD")
+macdSig     = input.int(5,  "MACD Signal", group="MACD")
+
+// -- Volume --
+volLen      = input.int(14,   "Volume SMA Length",       group="Volume")
+volMult     = input.float(1.3, "Volume Spike Multiplier", step=0.1, group="Volume")
+
+// -- VWAP --
+useVWAP     = input.bool(true, "Use VWAP Bias Filter", group="VWAP")
+
+// -- Support / Resistance (Pivot) --
+useSR       = input.bool(true, "Use Support/Resistance Levels", group="S/R Levels")
+srLookback  = input.int(20,   "S/R Lookback Bars",  minval=5, maxval=100, group="S/R Levels")
+srProximity = input.float(0.15, "S/R Proximity % (how close to level)", minval=0.05, maxval=0.5, step=0.05, group="S/R Levels")
+
+// -- ADX --
+adxLen      = input.int(10, "ADX Length",   minval=5, group="ADX")
+adxMin      = input.int(15, "ADX Minimum",  group="ADX")
+
+// -- HTF Trend --
+useHTF      = input.bool(true, "Use Higher TF Trend Filter", group="HTF")
+htfTF       = input.timeframe("15", "Higher Timeframe",      group="HTF")
+
+// -- Session Filter (Liquid Hours Only) --
+useSess     = input.bool(false, "Enable Session Filter",           group="Session")
+sessStart   = input.int(8,  "Session Start Hour (exchange time)", minval=0, maxval=23, group="Session")
+sessEnd     = input.int(20, "Session End Hour (exchange time)",   minval=0, maxval=23, group="Session")
+
+// -- Cooldown --
+cooldownBars = input.int(3, "Cooldown Bars Between Trades", minval=1, group="Filters")
+
+// ===========================
+//  2. INDICATORS
+// ===========================
+
+// EMAs
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+emaTrend = ta.ema(close, emaTrendLen)
+
+// VWAP
+vwapVal = ta.vwap(hlc3)
+
+// RSI
+rsi = ta.rsi(close, rsiLen)
+
+// MACD
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+// ADX / DMI
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+
+// ATR (for reference only — SL/TP are percentage-based)
+atr = ta.atr(10)
+
+// Volume
+volAvg   = ta.sma(volume, volLen)
+volSpike = volume > volAvg * volMult
+
+// Candle analysis
+candleBody  = math.abs(close - open)
+candleRange = high - low
+bodyRatio   = candleRange > 0 ? candleBody / candleRange : 0
+upperWick   = high - math.max(close, open)
+lowerWick   = math.min(close, open) - low
+
+// ===========================
+//  2a. SUPPORT / RESISTANCE (Micro Levels)
+// ===========================
+recentHigh = ta.highest(high, srLookback)
+recentLow  = ta.lowest(low, srLookback)
+
+// Pivot-based support (recent swing low)
+pivotLow  = ta.pivotlow(low, 5, 5)
+pivotHigh = ta.pivothigh(high, 5, 5)
+
+var float supportLevel    = na
+var float resistanceLevel = na
+
+if not na(pivotLow)
+    supportLevel := pivotLow
+if not na(pivotHigh)
+    resistanceLevel := pivotHigh
+
+// Proximity: price is near support (within X%)
+nearSupport = useSR and not na(supportLevel) ? (close - supportLevel) / close * 100 < srProximity and close > supportLevel : false
+
+// ===========================
+//  2b. CANDLESTICK PATTERNS
+// ===========================
+
+// Bullish engulfing
+bullEngulf = close > open and close[1] < open[1] and close > open[1] and open < close[1] and bodyRatio > 0.5
+
+// Bullish pin bar (long lower wick, small body at top)
+bullPinBar = lowerWick > candleBody * 2 and upperWick < candleBody and close > open and bodyRatio > 0.2
+
+// Strong bullish candle (large body closing near high)
+strongBull = close > open and bodyRatio > 0.6 and upperWick < candleBody * 0.3
+
+// Any bullish candle pattern
+bullPattern = bullEngulf or bullPinBar or strongBull
+
+// Simple bullish close (minimum requirement)
+bullCandle = close > open and bodyRatio > 0.35
+
+// ===========================
+//  2c. HIGHER TIMEFRAME — NON-REPAINTING
+// ===========================
+htfEmaFast_raw = request.security(syminfo.tickerid, htfTF, ta.ema(close, emaFastLen)[1], lookahead=barmerge.lookahead_off)
+htfEmaSlow_raw = request.security(syminfo.tickerid, htfTF, ta.ema(close, emaSlowLen)[1], lookahead=barmerge.lookahead_off)
+
+htfBull = useHTF ? htfEmaFast_raw > htfEmaSlow_raw : true
+
+// ===========================
+//  2d. SESSION FILTER
+// ===========================
+currentHour = hour(time, syminfo.timezone)
+inSession   = useSess ? (currentHour >= sessStart and currentHour < sessEnd) : true
+
+// ===========================
+//  3. ENTRY RULES — CONFLUENCE-BASED
+// ===========================
+
+// --- TRIGGER: EMA crossover (fast crosses above slow) ---
+emaCross = ta.crossover(emaFast, emaSlow)
+
+// --- CONFLUENCES (scored) ---
+
+// C1: Trend — price above 50 EMA
+c_trend = close > emaTrend ? 1 : 0
+
+// C2: VWAP — price above VWAP (institutional bias)
+c_vwap = (useVWAP ? close > vwapVal : true) ? 1 : 0
+
+// C3: Volume spike — confirms breakout
+c_volume = volSpike ? 1 : 0
+
+// C4: RSI momentum — above 50, not overbought
+c_rsi = (rsi > 45 and rsi < rsiOB) ? 1 : 0
+
+// C5: MACD — bullish and momentum building
+c_macd = (macdLine > signalLine and macdHist > macdHist[1]) ? 1 : 0
+
+// C6: Candle pattern — bullish structure on signal bar
+c_candle = bullCandle ? 1 : 0
+
+// C7: Near support level — buying near demand zone
+c_support = nearSupport ? 1 : 0
+
+// C8: DI+ > DI- — directional pressure from buyers
+c_di = (diPlus > diMinus) ? 1 : 0
+
+// C9: ADX trending — market has momentum
+c_adx = (adx > adxMin) ? 1 : 0
+
+// C10: Close above previous high — breakout proof
+c_breakout = (close > high[1]) ? 1 : 0
+
+// --- Total Score (out of 10) ---
+totalScore = c_trend + c_vwap + c_volume + c_rsi + c_macd + c_candle + c_support + c_di + c_adx + c_breakout
+
+minBuyScore = 6  // need 6/10 minimum confluences
+
+// --- Cooldown ---
+var int lastEntryBar = 0
+cooldownOK = bar_index - lastEntryBar >= cooldownBars
+
+// --- FINAL BUY SIGNAL ---
+// Trigger (EMA cross) + minimum score + HTF alignment + session + cooldown
+buySignal = emaCross and totalScore >= minBuyScore and htfBull and cooldownOK and inSession
+
+// --- BONUS: Strong candle patterns can trigger without EMA cross ---
+// If a bullish engulfing/pin bar appears with very high score, buy even without cross
+patternBuy = bullPattern and not emaCross and totalScore >= 8 and htfBull and cooldownOK and inSession and (strategy.position_size == 0)
+
+// Combined buy
+finalBuy = buySignal or patternBuy
+
+// ===========================
+//  4. EXIT RULES — PERCENTAGE-BASED SL/TP
+// ===========================
+
+entryPrice = strategy.position_avg_price
+
+// Percentage-based levels
+longSL  = close * (1 - slPct / 100)
+longTP1 = close * (1 + tp1Pct / 100)
+longTP2 = close * (1 + tp2Pct / 100)
+
+trailTicks = math.round(close * (trailPct / 100) / syminfo.mintick)
+
+// --- Multi-trigger SELL conditions ---
+emaSellCross  = ta.crossunder(emaFast, emaSlow)
+trendBreak    = close < emaTrend and close[1] >= emaTrend
+rsiExhaust    = rsi[1] >= rsiOB and rsi < rsiOB
+macdBearCross = ta.crossunder(macdLine, signalLine)
+diFlip        = diMinus > diPlus and diPlus[1] >= diMinus[1]
+belowVWAP     = useVWAP and close < vwapVal and close[1] >= vwapVal
+
+exitCount = (emaSellCross ? 1 : 0) + (trendBreak ? 1 : 0) + (rsiExhaust ? 1 : 0) + (macdBearCross ? 1 : 0) + (diFlip ? 1 : 0) + (belowVWAP ? 1 : 0)
+
+// Sell when 2+ bearish triggers fire simultaneously
+sellSignal  = exitCount >= 2 and strategy.position_size > 0
+
+// Strong sell: EMA death cross + below trend EMA
+strongSell = emaSellCross and close < emaTrend and strategy.position_size > 0
+
+// ===========================
+//  5. POSITION SIZING — RISK-BASED
+// ===========================
+
+// Calculate position size based on risk % and SL distance
+// Risk amount = equity * riskPct%
+// Position size = risk amount / SL distance
+capitalRisk   = strategy.equity * (riskPct / 100)
+slDistance     = close * (slPct / 100)
+positionSize  = slDistance > 0 ? capitalRisk / slDistance : 0
+maxQty        = strategy.equity / close  // max we can buy with equity
+finalQty      = math.min(positionSize, maxQty)
+
+// ===========================
+//  6. EXECUTION — SPOT LONG ONLY
+// ===========================
+
+if finalBuy
+    lastEntryBar := bar_index
+    strategy.entry("Buy", strategy.long, qty=finalQty)
+
+    // TP1: partial close at tp1Pct%
+    strategy.exit("TP1", "Buy",
+         qty_percent = tp1ClosePct,
+         stop  = longSL,
+         limit = longTP1)
+
+    // TP2: remainder — trail or fixed
+    if useTrail
+        strategy.exit("TP2", "Buy",
+             stop         = longSL,
+             trail_points = trailTicks,
+             trail_offset = trailTicks)
+    else
+        strategy.exit("TP2", "Buy",
+             stop  = longSL,
+             limit = longTP2)
+
+// Sell on bearish confluence
+if sellSignal or strongSell
+    strategy.close("Buy", comment = strongSell ? "STRONG SELL" : "SELL EXIT")
+
+// ===========================
+//  7. VISUALS
+// ===========================
+
+// EMAs
+p1 = plot(emaFast,  "Fast EMA",  color.new(color.lime, 0),   1)
+p2 = plot(emaSlow,  "Slow EMA",  color.new(color.orange, 0), 1)
+plot(emaTrend, "Trend EMA", color.new(color.white, 30), 2)
+fill(p1, p2, color = emaFast > emaSlow ? color.new(color.green, 85) : color.new(color.red, 85))
+
+// VWAP
+plot(useVWAP ? vwapVal : na, "VWAP", color.new(color.fuchsia, 0), 2, plot.style_cross)
+
+// Support / Resistance levels
+plot(useSR and not na(supportLevel) ? supportLevel : na, "Support", color.new(color.aqua, 30), 1, plot.style_stepline_diamond)
+plot(useSR and not na(resistanceLevel) ? resistanceLevel : na, "Resistance", color.new(color.red, 30), 1, plot.style_stepline_diamond)
+
+// Signals
+plotshape(buySignal,  "BUY (Cross)",   shape.triangleup,   location.belowbar, color.new(color.lime, 0),  size=size.small, text="BUY")
+plotshape(patternBuy, "BUY (Pattern)", shape.diamond,       location.belowbar, color.new(color.aqua, 0),  size=size.small, text="PAT\nBUY")
+plotshape(sellSignal or strongSell, "SELL", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.small, text="SELL")
+
+// Signal bar background
+bgcolor(finalBuy ? color.new(color.lime, 90) : na)
+bgcolor(sellSignal or strongSell ? color.new(color.red, 90) : na)
+
+// Trend tint
+trendTint = close > emaTrend and adx > adxMin ? color.new(color.green, 96) : na
+bgcolor(trendTint)
+
+// SL/TP on active position
+plot(strategy.position_size > 0 ? entryPrice * (1 - slPct / 100) : na, "Stop Loss", color.red,    1, plot.style_linebr)
+plot(strategy.position_size > 0 ? entryPrice * (1 + tp1Pct / 100) : na, "TP1",      color.green,  1, plot.style_linebr)
+plot(strategy.position_size > 0 ? entryPrice * (1 + tp2Pct / 100) : na, "TP2",      color.teal,   1, plot.style_linebr)
+plot(strategy.position_size > 0 ? entryPrice : na, "Entry",               color.yellow, 1, plot.style_linebr)
+
+// Candle pattern markers
+plotshape(bullEngulf and not finalBuy, "Engulfing",  shape.arrowup, location.belowbar, color.new(color.yellow, 50), size=size.tiny)
+plotshape(bullPinBar and not finalBuy, "Pin Bar",    shape.circle,  location.belowbar, color.new(color.aqua, 50),   size=size.tiny)
+
+// ===========================
+//  8. DASHBOARD
+// ===========================
+var table dash = table.new(position.top_right, 3, 16, color.new(color.black, 75), color.gray, 1, color.gray, 1)
+
+checkMark(bool c) => c ? "✓" : "✗"
+checkClr(bool c)  => c ? color.lime : color.new(color.red, 30)
+
+if barstate.islast
+    inPos = strategy.position_size > 0
+
+    // Header
+    table.cell(dash, 0, 0, "SPOT SCALPER",  text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 0, "",              text_size=size.small)
+    table.cell(dash, 2, 0, inPos ? "IN TRADE" : "WATCHING", text_color=inPos ? color.lime : color.gray, text_size=size.small)
+
+    // Position info
+    table.cell(dash, 0, 1, "P&L",          text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    pnlPct = inPos ? (close - entryPrice) / entryPrice * 100 : 0.0
+    table.cell(dash, 1, 1, str.tostring(pnlPct, "#.##") + "%", text_color=pnlPct >= 0 ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 2, 1, "SL: " + str.tostring(slPct) + "% | TP: " + str.tostring(tp1Pct) + "/" + str.tostring(tp2Pct) + "%", text_color=color.gray, text_size=size.tiny)
+
+    // Separator
+    table.cell(dash, 0, 2, "── CONFLUENCES ──", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 2, "", text_size=size.tiny)
+    table.cell(dash, 2, 2, "", text_size=size.tiny)
+
+    // C1 Trend
+    table.cell(dash, 0, 3, "Trend (>50EMA)",  text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 3, checkMark(c_trend == 1), text_color=checkClr(c_trend == 1), text_size=size.small)
+    table.cell(dash, 2, 3, c_trend == 1 ? "ABOVE" : "BELOW", text_color=checkClr(c_trend == 1), text_size=size.tiny)
+
+    // C2 VWAP
+    table.cell(dash, 0, 4, "VWAP Bias",       text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 4, checkMark(c_vwap == 1), text_color=checkClr(c_vwap == 1), text_size=size.small)
+    table.cell(dash, 2, 4, close > vwapVal ? "ABOVE" : "BELOW", text_color=checkClr(close > vwapVal), text_size=size.tiny)
+
+    // C3 Volume
+    table.cell(dash, 0, 5, "Volume Spike",     text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 5, checkMark(c_volume == 1), text_color=checkClr(c_volume == 1), text_size=size.small)
+    table.cell(dash, 2, 5, c_volume == 1 ? "SPIKE" : "NORMAL", text_color=checkClr(c_volume == 1), text_size=size.tiny)
+
+    // C4 RSI
+    table.cell(dash, 0, 6, "RSI Momentum",     text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 6, str.tostring(rsi, "#.#"), text_color=checkClr(c_rsi == 1), text_size=size.small)
+    table.cell(dash, 2, 6, rsi >= rsiOB ? "OVERBOUGHT" : rsi <= rsiOS ? "OVERSOLD" : "OK", text_color=checkClr(c_rsi == 1), text_size=size.tiny)
+
+    // C5 MACD
+    table.cell(dash, 0, 7, "MACD Momentum",    text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 7, checkMark(c_macd == 1), text_color=checkClr(c_macd == 1), text_size=size.small)
+    table.cell(dash, 2, 7, c_macd == 1 ? "BULL↑" : "FLAT", text_color=checkClr(c_macd == 1), text_size=size.tiny)
+
+    // C6 Candle
+    table.cell(dash, 0, 8, "Candle Pattern",    text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 8, checkMark(c_candle == 1), text_color=checkClr(c_candle == 1), text_size=size.small)
+    pName = bullEngulf ? "ENGULF" : bullPinBar ? "PIN BAR" : strongBull ? "STRONG" : bullCandle ? "BULL" : "BEAR"
+    table.cell(dash, 2, 8, pName, text_color=checkClr(c_candle == 1), text_size=size.tiny)
+
+    // C7 S/R
+    table.cell(dash, 0, 9, "Near Support",      text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 9, checkMark(c_support == 1), text_color=checkClr(c_support == 1), text_size=size.small)
+    table.cell(dash, 2, 9, c_support == 1 ? "YES" : "NO", text_color=checkClr(c_support == 1), text_size=size.tiny)
+
+    // C8 DI
+    table.cell(dash, 0, 10, "DI+ > DI-",        text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 10, checkMark(c_di == 1), text_color=checkClr(c_di == 1), text_size=size.small)
+    table.cell(dash, 2, 10, c_di == 1 ? "BUYERS" : "SELLERS", text_color=checkClr(c_di == 1), text_size=size.tiny)
+
+    // C9 ADX
+    table.cell(dash, 0, 11, "ADX Trending",      text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 11, str.tostring(adx, "#.#"), text_color=checkClr(c_adx == 1), text_size=size.small)
+    table.cell(dash, 2, 11, c_adx == 1 ? "TREND" : "CHOP", text_color=checkClr(c_adx == 1), text_size=size.tiny)
+
+    // C10 Breakout
+    table.cell(dash, 0, 12, "Break Prev High",   text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 12, checkMark(c_breakout == 1), text_color=checkClr(c_breakout == 1), text_size=size.small)
+    table.cell(dash, 2, 12, c_breakout == 1 ? "YES" : "NO", text_color=checkClr(c_breakout == 1), text_size=size.tiny)
+
+    // Separator
+    table.cell(dash, 0, 13, "── TOTAL ──", text_color=color.gray, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 13, "", text_size=size.tiny)
+    table.cell(dash, 2, 13, "", text_size=size.tiny)
+
+    // Score
+    table.cell(dash, 0, 14, "SCORE",            text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 14, str.tostring(totalScore) + "/10", text_color=totalScore >= minBuyScore ? color.lime : color.red, text_size=size.normal)
+    table.cell(dash, 2, 14, totalScore >= minBuyScore ? "READY" : "WAIT", text_color=totalScore >= minBuyScore ? color.lime : color.orange, text_size=size.small)
+
+    // HTF
+    table.cell(dash, 0, 15, "HTF Trend",         text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 15, checkMark(htfBull), text_color=checkClr(htfBull), text_size=size.small)
+    table.cell(dash, 2, 15, htfBull ? "BULLISH" : "BEARISH", text_color=checkClr(htfBull), text_size=size.tiny)
+
+// ===========================
+//  9. ALERTS
+// ===========================
+alertcondition(buySignal,                "Spot Buy (Cross)",   "SPOT BUY — EMA cross + confluence")
+alertcondition(patternBuy,               "Spot Buy (Pattern)", "SPOT BUY — candle pattern + high confluence")
+alertcondition(sellSignal or strongSell, "Spot Sell",          "SPOT SELL — exit position")

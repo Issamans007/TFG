@@ -76,6 +76,61 @@ fun TradeScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        // Spot / Futures market type tabs
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            listOf(MarketType.SPOT to "Spot", MarketType.FUTURES_USDM to "Futures").forEach { (mt, label) ->
+                val selected = state.marketType == mt
+                Button(
+                    onClick = { viewModel.setMarketType(mt) },
+                    modifier = Modifier.weight(1f).padding(end = 4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selected) AccentBlue else DarkSurface
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(label, color = if (selected) TextPrimary else TextSecondary)
+                }
+            }
+        }
+
+        // Futures-only controls
+        if (state.marketType == MarketType.FUTURES_USDM) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                Text("Leverage: ${state.leverage}x", color = TextPrimary, fontSize = 13.sp)
+                Slider(
+                    value = state.leverage.toFloat(),
+                    onValueChange = { viewModel.setLeverage(it.toInt()) },
+                    valueRange = 1f..125f,
+                    steps = 123
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row {
+                    listOf(MarginType.ISOLATED to "Isolated", MarginType.CROSSED to "Cross").forEach { (m, label) ->
+                        val selected = state.marginType == m
+                        Button(
+                            onClick = { viewModel.setMarginType(m) },
+                            modifier = Modifier.weight(1f).padding(end = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selected) AccentBlue else DarkSurface
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) { Text(label, color = if (selected) TextPrimary else TextSecondary, fontSize = 12.sp) }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Reduce Only", color = TextSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = state.reduceOnly,
+                        onCheckedChange = { viewModel.toggleReduceOnly() }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         // Buy / Sell tabs
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             TfgButton(

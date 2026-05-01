@@ -26,6 +26,7 @@ class KeystoreManager @Inject constructor(
         private const val API_KEY_ALIAS = "tfg_api_key"
         private const val API_SECRET_ALIAS = "tfg_api_secret"
         private const val PIN_ALIAS = "tfg_pin"
+        private const val AUTH_TOKEN_ALIAS = "tfg_auth_token"
         private const val PREFS_NAME = "tfg_keystore_prefs"
         private const val GCM_TAG_LENGTH = 128
     }
@@ -36,6 +37,13 @@ class KeystoreManager @Inject constructor(
     fun getApiSecret(): String = decrypt(API_SECRET_ALIAS)
     fun storePin(pin: String) = encrypt(PIN_ALIAS, pin)
     fun getPin(): String = decrypt(PIN_ALIAS)
+    fun storeAuthToken(token: String) = encrypt(AUTH_TOKEN_ALIAS, token)
+    fun getAuthToken(): String = decrypt(AUTH_TOKEN_ALIAS)
+    fun clearAuthToken() {
+        runCatching { keyStore.deleteEntry(AUTH_TOKEN_ALIAS) }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .remove("${AUTH_TOKEN_ALIAS}_iv").remove("${AUTH_TOKEN_ALIAS}_data").apply()
+    }
     fun hasApiKey(): Boolean = keyStore.containsAlias(API_KEY_ALIAS)
 
     fun revokeApiKeys() {
@@ -181,10 +189,7 @@ class SignalVerifier @Inject constructor() {
 }
 
 object ScreenshotPrevention {
-    fun apply(window: android.view.Window) {
-        window.setFlags(
-            android.view.WindowManager.LayoutParams.FLAG_SECURE,
-            android.view.WindowManager.LayoutParams.FLAG_SECURE
-        )
-    }
+    // Screenshots and screen recording are enabled.
+    @Suppress("UNUSED_PARAMETER")
+    fun apply(window: android.view.Window) = Unit
 }

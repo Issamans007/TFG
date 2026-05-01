@@ -28,4 +28,20 @@ interface TradingRepository {
                                    stopLossPrice: Double): Result<List<Order>>
 
     suspend fun reconcileWithBinance(): Result<Boolean>
+
+    // ── Futures (USDⓈ-M) ───────────────────────────────────────────
+    /** Change leverage for a futures symbol. Returns the actual leverage applied. */
+    suspend fun changeFuturesLeverage(symbol: String, leverage: Int): Result<Int> =
+        Result.failure(UnsupportedOperationException("Futures not supported"))
+
+    /** Change margin type for a futures symbol. */
+    suspend fun changeFuturesMarginType(symbol: String, marginType: MarginType): Result<Boolean> =
+        Result.failure(UnsupportedOperationException("Futures not supported"))
+
+    /** Get current futures positions from /fapi/v2/positionRisk. */
+    fun getFuturesPositions(): Flow<List<Position>> = kotlinx.coroutines.flow.flowOf(emptyList())
+
+    /** Close an open futures position with a market reduce-only order. */
+    suspend fun closeFuturesPosition(symbol: String, positionSide: PositionSide = PositionSide.BOTH): Result<Order> =
+        Result.failure(UnsupportedOperationException("Futures not supported"))
 }

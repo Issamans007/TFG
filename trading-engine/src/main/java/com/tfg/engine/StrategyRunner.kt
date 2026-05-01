@@ -8,6 +8,7 @@ import com.tfg.data.local.mapper.EntityMapper
 import com.tfg.domain.model.*
 import com.tfg.data.remote.websocket.WebSocketManager
 import com.tfg.domain.repository.AuditRepository
+import com.tfg.domain.repository.FeeRepository
 import com.tfg.domain.repository.MarketRepository
 import com.tfg.domain.repository.PortfolioRepository
 import com.tfg.domain.repository.ScriptRepository
@@ -33,13 +34,15 @@ class StrategyRunner @Inject constructor(
     private val portfolioRepository: PortfolioRepository,
     private val marketRepository: MarketRepository,
     private val webSocketManager: WebSocketManager,
-    private val scriptExecutor: ScriptExecutor
+    private val scriptExecutor: ScriptExecutor,
+    private val feeRepository: FeeRepository
 ) {
 
     private companion object {
         const val PREFS_NAME = "tfg_strategy_runner"
         const val KEY_POSITION = "current_position"
-        const val LIVE_FEE_PCT = 0.001 // 0.1% — matches backtester fee
+        // Fallback when FeeConfig load fails. Effective fee always read from FeeRepository.
+        const val LIVE_FEE_PCT = 0.001
         const val DEFAULT_LOOKBACK = 200
         const val MIN_BARS = 50
         const val MAX_CONSECUTIVE_FAILURES = 5 // B7: auto-deactivate after this many
@@ -55,7 +58,17 @@ class StrategyRunner @Inject constructor(
     private val _lastSignal = MutableStateFlow<String>("IDLE")
     val lastSignal: StateFlow<String> = _lastSignal
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val _dashboardJson = MutableStateFlow<String?>(null)
+    val dashboardJson: StateFlow<String?> = _dashboardJson
+
+    private val _plotDataJson = MutableStateFlow<String?>(null)
+    val plotDataJson: StateFlow<String?> = _plotDataJson
+
+    // Recreated on every start() so children launched during a previous run
+    // can be fully cancelled by stop(). Without this, a stop() that only
+    // cancels runnerJob leaves any sibling launches inside the loop
+    // (price feeds, audit logs, signal flows) running until the next start.
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     // ─── Position tracking — prevents duplicate entries ─────────
     private data class TrackedPosition(val side: OrderSide, val entryPrice: Double, val symbol: String, val quantity: Double, val entries: Int = 1)
@@ -73,12 +86,16 @@ class StrategyRunner @Inject constructor(
             }
         }
 
-    private var evalContext = StrategyEvaluator.EvalContext()
     private var consecutiveFailures = 0
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun start() {
         if (runnerJob?.isActive == true) return
+        // Fresh scope each run so any orphaned children from a prior session
+        // (e.g. a stop() that only cancelled runnerJob) are guaranteed gone.
+        if (!scope.isActive) {
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        }
 
         runnerJob = scope.launch {
             scriptRepository.getActiveStrategy().flatMapLatest<_, Unit> { script ->
@@ -117,33 +134,23 @@ class StrategyRunner @Inject constructor(
     fun stop() {
         runnerJob?.cancel()
         runnerJob = null
+        // Cancel everything launched off `scope` (price feeds, audit writes,
+        // signal collectors). start() will install a fresh scope.
+        scope.cancel()
         _isRunning.value = false
         _lastSignal.value = "IDLE"
-        evalContext = StrategyEvaluator.EvalContext()
     }
 
     private suspend fun runStrategyLoop(script: Script) {
         val symbol = script.activeSymbol ?: return
-        val templateId = script.strategyTemplateId
         // Read timeframe from script params instead of hardcoding
         val interval = script.params["INTERVAL"] ?: "1h"
-        // Fresh context per strategy activation
-        evalContext = StrategyEvaluator.EvalContext()
 
         // Only clear persisted position if switching to a different symbol;
         // on service restart for the same symbol, preserve it to avoid duplicates
         val restoredPos = currentPosition
         if (restoredPos != null && restoredPos.symbol != symbol) {
             currentPosition = null
-        }
-
-        // Determine once whether the user edited the template code
-        val isCustomCode = script.code.isNotBlank() && run {
-            val templateCode = try {
-                StrategyTemplates.getAll()
-                    .firstOrNull { it.id.name == templateId }?.code ?: ""
-            } catch (_: Exception) { "" }
-            script.code.trimIndent() != templateCode.trimIndent()
         }
 
         // B1: Determine higher timeframes to fetch
@@ -191,27 +198,51 @@ class StrategyRunner @Inject constructor(
                             positionEntry = pos?.entryPrice ?: 0.0
                         )
 
-                        val signal = if (isCustomCode) {
-                            // B1: Refresh HTF candles periodically
-                            val now = System.currentTimeMillis()
-                            if (htfIntervals.isNotEmpty() && now - lastHtfFetchMs > htfRefreshMs) {
-                                htfCache = fetchHtfCandles(symbol, htfIntervals)
-                                lastHtfFetchMs = now
-                            }
-                            scriptExecutor.evaluate(script.code, candles, script.params, acctContext, htfCache)
-                        } else {
-                            StrategyEvaluator.evaluate(templateId, candles, script.params, evalContext)
+                        // B1: Refresh HTF candles periodically
+                        val now = System.currentTimeMillis()
+                        if (htfIntervals.isNotEmpty() && now - lastHtfFetchMs > htfRefreshMs) {
+                            htfCache = fetchHtfCandles(symbol, htfIntervals)
+                            lastHtfFetchMs = now
                         }
-                        _lastSignal.value = signal.javaClass.simpleName
+                        // All strategies execute via JS engine
+                        val rawSignal = scriptExecutor.evaluate(script.code, candles, script.params, acctContext, htfCache)
+                        _lastSignal.value = rawSignal.javaClass.simpleName
+                        _dashboardJson.value = scriptExecutor.getLastDashboard()
+                        _plotDataJson.value = scriptExecutor.getLastPlotData()
                         consecutiveFailures = 0 // Reset on successful evaluation
 
-                        // Store signal marker for chart overlay
+                        // Apply user TradingPlan: layer SL/TP/leverage/session-hours/short-allowed
+                        // onto raw signal so live + backtest behave identically.
+                        val plan = com.tfg.domain.model.TradingPlan.fromScript(script)
                         val lastCandle = candles.last()
+                        val atrAbs = computeAtrAbs(candles, period = 14)
+                        val signal = com.tfg.domain.model.PlanApplier.apply(
+                            rawSignal, plan, atrAbs, lastCandle.close, lastCandle.openTime
+                        )
+                        _lastSignal.value = signal.javaClass.simpleName
+
+                        // Store signal marker for chart overlay
                         val signalType = when (signal) {
-                            is StrategySignal.BUY -> SignalType.BUY
-                            is StrategySignal.SELL -> SignalType.SELL
+                            is StrategySignal.BUY -> when (signal.label) {
+                                SignalLabel.PATTERN -> SignalType.PAT_BUY
+                                else -> SignalType.BUY
+                            }
+                            is StrategySignal.SELL -> when (signal.label) {
+                                SignalLabel.PATTERN -> SignalType.PAT_SELL
+                                else -> SignalType.SELL
+                            }
                             is StrategySignal.CLOSE_IF_LONG, is StrategySignal.CLOSE_IF_SHORT -> SignalType.CLOSE
                             else -> null
+                        }
+                        val markerLabel = when (signal) {
+                            is StrategySignal.BUY -> signal.labelRaw
+                            is StrategySignal.SELL -> signal.labelRaw
+                            else -> ""
+                        }
+                        val markerOrderType = when (signal) {
+                            is StrategySignal.BUY -> signal.orderType.name
+                            is StrategySignal.SELL -> signal.orderType.name
+                            else -> "MARKET"
                         }
                         if (signalType != null) {
                             signalMarkerDao.insertAll(listOf(
@@ -219,7 +250,9 @@ class StrategyRunner @Inject constructor(
                                     id = "${symbol}_${lastCandle.openTime}_${signalType.name}",
                                     scriptId = script.id, symbol = symbol, interval = interval,
                                     openTime = lastCandle.openTime, signalType = signalType.name,
-                                    price = lastCandle.close
+                                    price = lastCandle.close,
+                                    label = markerLabel,
+                                    orderType = markerOrderType
                                 )
                             ))
                         }
@@ -228,7 +261,9 @@ class StrategyRunner @Inject constructor(
                             is StrategySignal.BUY -> {
                                 // Close opposite position if any
                                 if (currentPosition != null && currentPosition?.side == OrderSide.SELL) {
-                                    closePosition(symbol, OrderSide.SELL, currentPosition!!.quantity, script)
+                                    val qty = currentPosition?.quantity
+                                    if (qty != null) closePosition(symbol, OrderSide.SELL, qty, script)
+                                    else Timber.w("Position state cleared mid-flow on $symbol; skipping close")
                                     currentPosition = null
                                 }
                                 val existing = currentPosition
@@ -248,7 +283,9 @@ class StrategyRunner @Inject constructor(
                             is StrategySignal.SELL -> {
                                 // Close opposite position if any
                                 if (currentPosition != null && currentPosition?.side == OrderSide.BUY) {
-                                    closePosition(symbol, OrderSide.BUY, currentPosition!!.quantity, script)
+                                    val qty = currentPosition?.quantity
+                                    if (qty != null) closePosition(symbol, OrderSide.BUY, qty, script)
+                                    else Timber.w("Position state cleared mid-flow on $symbol; skipping close")
                                     currentPosition = null
                                 }
                                 val existing = currentPosition
@@ -266,14 +303,16 @@ class StrategyRunner @Inject constructor(
                                 }
                             }
                             is StrategySignal.CLOSE_IF_LONG -> {
-                                if (currentPosition?.side == OrderSide.BUY) {
-                                    closePosition(symbol, OrderSide.BUY, currentPosition!!.quantity, script)
+                                val pos = currentPosition
+                                if (pos?.side == OrderSide.BUY) {
+                                    closePosition(symbol, OrderSide.BUY, pos.quantity, script)
                                     currentPosition = null
                                 }
                             }
                             is StrategySignal.CLOSE_IF_SHORT -> {
-                                if (currentPosition?.side == OrderSide.SELL) {
-                                    closePosition(symbol, OrderSide.SELL, currentPosition!!.quantity, script)
+                                val pos = currentPosition
+                                if (pos?.side == OrderSide.SELL) {
+                                    closePosition(symbol, OrderSide.SELL, pos.quantity, script)
                                     currentPosition = null
                                 }
                             }
@@ -295,11 +334,51 @@ class StrategyRunner @Inject constructor(
                             symbol = symbol,
                             userId = "system"
                         ))
+                        notifyStrategyDeactivated(script.name, consecutiveFailures, e.message)
                         scriptRepository.deactivateStrategy(script.id)
                         throw CancellationException("Strategy auto-deactivated after $consecutiveFailures consecutive failures")
                     }
                 }
             }
+    }
+
+    /**
+     * Posts a high-priority notification when a strategy is auto-deactivated
+     * after repeated evaluation failures, so the user is aware their bot is
+     * no longer trading instead of silently going idle.
+     */
+    private fun notifyStrategyDeactivated(strategyName: String, failures: Int, lastError: String?) {
+        try {
+            val channelId = "tfg_strategy_alerts"
+            val nm = context.getSystemService(android.app.NotificationManager::class.java)
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        channelId,
+                        "Strategy Alerts",
+                        android.app.NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Alerts when a strategy is paused or auto-deactivated"
+                    }
+                )
+            }
+            val notif = androidx.core.app.NotificationCompat.Builder(context, channelId)
+                .setContentTitle("Strategy auto-deactivated")
+                .setContentText("'$strategyName' paused after $failures failures")
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(
+                    "Strategy '$strategyName' has been auto-deactivated after $failures " +
+                    "consecutive evaluation failures.\n\n" +
+                    "Last error: ${lastError ?: "unknown"}\n\n" +
+                    "The bot is no longer trading this strategy. Review the script and re-enable it manually."
+                ))
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(2_000 + strategyName.hashCode().and(0xFFFF), notif)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to post strategy-deactivation notification")
+        }
     }
 
     // ─── Trade execution helpers ────────────────────────────────────
@@ -312,19 +391,39 @@ class StrategyRunner @Inject constructor(
             portfolioRepository.getPortfolio().first()
         }
         riskEngine.updatePortfolio(p)
+        // Resolve futures context: signal overrides, else fall back to user defaults
+        val mkt = signal.marketType ?: if (settingsRepository.isFuturesEnabled()) MarketType.FUTURES_USDM else MarketType.SPOT
+        val lev = (signal.leverage ?: settingsRepository.getDefaultLeverage().coerceAtLeast(1)).coerceIn(1, 125)
+        val mgn = signal.marginType ?: settingsRepository.getDefaultMarginType()
+        val isFutures = mkt == MarketType.FUTURES_USDM
         // Calculate quantity from sizePct and real portfolio balance (fee-adjusted)
+        val feeCfg = runCatching { feeRepository.getFeeConfig().first() }.getOrNull()
+        val feePct = feeCfg?.let {
+            if (isFutures) it.effectiveFuturesTakerRate() else it.effectiveTakerRate()
+        } ?: LIVE_FEE_PCT
         val qty = if (currentPrice > 0 && signal.sizePct > 0) {
-            val notional = p.totalBalance * signal.sizePct / 100.0
-            (notional / currentPrice) * (1.0 - LIVE_FEE_PCT)
+            val notional = p.totalBalance * signal.sizePct / 100.0 * (if (isFutures) lev else 1)
+            (notional / currentPrice) * (1.0 - feePct)
         } else 0.001
+        val mappedOrderType = when (signal.orderType) {
+            SignalOrderType.MARKET -> OrderType.MARKET
+            SignalOrderType.LIMIT -> OrderType.LIMIT
+            SignalOrderType.STOP_LIMIT -> OrderType.STOP_LIMIT
+            SignalOrderType.TRAILING_STOP -> OrderType.TRAILING_STOP
+        }
         val order = Order(
             id = UUID.randomUUID().toString(),
             symbol = symbol,
             side = OrderSide.BUY,
-            type = OrderType.MARKET,
+            type = mappedOrderType,
             executionMode = ExecutionMode.SCRIPT,
             quantity = qty,
+            price = if (mappedOrderType == OrderType.LIMIT) (signal.limitPrice ?: currentPrice) else null,
+            stopPrice = if (mappedOrderType == OrderType.STOP_LIMIT) (signal.limitPrice ?: currentPrice) else null,
             isPaperTrade = isPaper,
+            marketType = mkt,
+            leverage = if (isFutures) lev else 1,
+            marginType = mgn,
             takeProfits = if (signal.takeProfitLevels.isNotEmpty() && currentPrice > 0) {
                 signal.takeProfitLevels.map { lvl ->
                     TakeProfit(UUID.randomUUID().toString(),
@@ -369,18 +468,37 @@ class StrategyRunner @Inject constructor(
             portfolioRepository.getPortfolio().first()
         }
         riskEngine.updatePortfolio(p)
+        val mkt = signal.marketType ?: if (settingsRepository.isFuturesEnabled()) MarketType.FUTURES_USDM else MarketType.SPOT
+        val lev = (signal.leverage ?: settingsRepository.getDefaultLeverage().coerceAtLeast(1)).coerceIn(1, 125)
+        val mgn = signal.marginType ?: settingsRepository.getDefaultMarginType()
+        val isFutures = mkt == MarketType.FUTURES_USDM
+        val feeCfg = runCatching { feeRepository.getFeeConfig().first() }.getOrNull()
+        val feePct = feeCfg?.let {
+            if (isFutures) it.effectiveFuturesTakerRate() else it.effectiveTakerRate()
+        } ?: LIVE_FEE_PCT
         val qty = if (currentPrice > 0 && signal.sizePct > 0) {
-            val notional = p.totalBalance * signal.sizePct / 100.0
-            (notional / currentPrice) * (1.0 - LIVE_FEE_PCT)
+            val notional = p.totalBalance * signal.sizePct / 100.0 * (if (isFutures) lev else 1)
+            (notional / currentPrice) * (1.0 - feePct)
         } else 0.001
+        val mappedOrderType = when (signal.orderType) {
+            SignalOrderType.MARKET -> OrderType.MARKET
+            SignalOrderType.LIMIT -> OrderType.LIMIT
+            SignalOrderType.STOP_LIMIT -> OrderType.STOP_LIMIT
+            SignalOrderType.TRAILING_STOP -> OrderType.TRAILING_STOP
+        }
         val order = Order(
             id = UUID.randomUUID().toString(),
             symbol = symbol,
             side = OrderSide.SELL,
-            type = OrderType.MARKET,
+            type = mappedOrderType,
             executionMode = ExecutionMode.SCRIPT,
             quantity = qty,
+            price = if (mappedOrderType == OrderType.LIMIT) (signal.limitPrice ?: currentPrice) else null,
+            stopPrice = if (mappedOrderType == OrderType.STOP_LIMIT) (signal.limitPrice ?: currentPrice) else null,
             isPaperTrade = isPaper,
+            marketType = mkt,
+            leverage = if (isFutures) lev else 1,
+            marginType = mgn,
             takeProfits = if (signal.takeProfitLevels.isNotEmpty() && currentPrice > 0) {
                 signal.takeProfitLevels.map { lvl ->
                     TakeProfit(UUID.randomUUID().toString(),
@@ -499,5 +617,25 @@ class StrategyRunner @Inject constructor(
         "8h" -> 28_800_000L; "12h" -> 43_200_000L; "1d" -> 86_400_000L
         "3d" -> 259_200_000L; "1w" -> 604_800_000L
         else -> 3_600_000L
+    }
+
+    /** Wilder ATR over [period] bars; returns absolute price ATR or null if insufficient data. */
+    private fun computeAtrAbs(candles: List<com.tfg.domain.model.Candle>, period: Int = 14): Double? {
+        if (candles.size <= period) return null
+        var atr = 0.0
+        // Seed with simple TR average over first [period] bars
+        for (i in 1..period) {
+            val c = candles[i]; val p = candles[i - 1]
+            val tr = maxOf(c.high - c.low, kotlin.math.abs(c.high - p.close), kotlin.math.abs(c.low - p.close))
+            atr += tr
+        }
+        atr /= period
+        // Wilder smoothing through remaining bars
+        for (i in period + 1 until candles.size) {
+            val c = candles[i]; val p = candles[i - 1]
+            val tr = maxOf(c.high - c.low, kotlin.math.abs(c.high - p.close), kotlin.math.abs(c.low - p.close))
+            atr = (atr * (period - 1) + tr) / period
+        }
+        return if (atr > 0) atr else null
     }
 }

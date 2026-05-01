@@ -43,7 +43,14 @@ data class OrderEntity(
     val executedAt: Long? = null,
     val closedAt: Long? = null,
     val binanceOrderId: Long? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    // Futures-specific (defaults preserve spot semantics)
+    val marketType: String = "SPOT",
+    val leverage: Int = 1,
+    val marginType: String = "ISOLATED",
+    val positionSide: String = "BOTH",
+    val reduceOnly: Boolean = false,
+    val closePosition: Boolean = false
 )
 
 @Entity(
@@ -193,6 +200,8 @@ data class SignalMarkerEntity(
     val openTime: Long,
     val signalType: String,
     val price: Double,
+    val label: String = "",
+    val orderType: String = "MARKET",
     val timestamp: Long = System.currentTimeMillis()
 )
 

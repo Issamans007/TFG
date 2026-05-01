@@ -9,6 +9,11 @@ android {
     namespace = "com.tfg.data.remote"
     compileSdk = 35
     defaultConfig { minSdk = 26 }
+    buildFeatures {
+        // BuildConfig.DEBUG used by NetworkModule to gate HTTP body logging
+        // and redact secrets in production.
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

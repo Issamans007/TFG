@@ -23,7 +23,8 @@ object DatabaseModule {
                 TfgDatabase.MIGRATION_1_2, TfgDatabase.MIGRATION_2_3,
                 TfgDatabase.MIGRATION_3_4, TfgDatabase.MIGRATION_4_5,
                 TfgDatabase.MIGRATION_5_6, TfgDatabase.MIGRATION_6_7,
-                TfgDatabase.MIGRATION_7_8, TfgDatabase.MIGRATION_8_9
+                TfgDatabase.MIGRATION_7_8, TfgDatabase.MIGRATION_8_9,
+                TfgDatabase.MIGRATION_9_10, TfgDatabase.MIGRATION_10_11
             )
             .fallbackToDestructiveMigration()
             .build()

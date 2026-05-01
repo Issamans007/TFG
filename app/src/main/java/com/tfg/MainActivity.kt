@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import com.tfg.core.ui.theme.TfgTheme
 import com.tfg.core.ui.theme.LocalTfgColors
 import com.tfg.navigation.AppNavGraph
-import com.tfg.security.ScreenshotPrevention
 import dagger.hilt.android.AndroidEntryPoint
 import com.tfg.domain.repository.SettingsRepository
 import javax.inject.Inject
@@ -24,7 +23,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ScreenshotPrevention.apply(window)
         enableEdgeToEdge()
 
         setContent {

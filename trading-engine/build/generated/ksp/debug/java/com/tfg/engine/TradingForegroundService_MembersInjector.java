@@ -2,8 +2,10 @@ package com.tfg.engine;
 
 import com.tfg.data.local.dao.OfflineQueueDao;
 import com.tfg.data.local.dao.OrderDao;
+import com.tfg.data.remote.api.UserDataStreamManager;
 import com.tfg.data.remote.websocket.WebSocketManager;
 import com.tfg.domain.repository.AuditRepository;
+import com.tfg.domain.repository.TradingRepository;
 import dagger.MembersInjector;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.InjectedFieldSignature;
@@ -41,13 +43,19 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
 
   private final Provider<AuditRepository> auditRepositoryProvider;
 
+  private final Provider<TradingRepository> tradingRepositoryProvider;
+
+  private final Provider<UserDataStreamManager> userDataStreamManagerProvider;
+
   public TradingForegroundService_MembersInjector(
       Provider<WebSocketManager> webSocketManagerProvider, Provider<RiskEngine> riskEngineProvider,
       Provider<TradeExecutor> tradeExecutorProvider, Provider<OrderDao> orderDaoProvider,
       Provider<OfflineQueueDao> offlineQueueDaoProvider,
       Provider<StrategyRunner> strategyRunnerProvider,
       Provider<EngineManager> engineManagerProvider,
-      Provider<AuditRepository> auditRepositoryProvider) {
+      Provider<AuditRepository> auditRepositoryProvider,
+      Provider<TradingRepository> tradingRepositoryProvider,
+      Provider<UserDataStreamManager> userDataStreamManagerProvider) {
     this.webSocketManagerProvider = webSocketManagerProvider;
     this.riskEngineProvider = riskEngineProvider;
     this.tradeExecutorProvider = tradeExecutorProvider;
@@ -56,6 +64,8 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
     this.strategyRunnerProvider = strategyRunnerProvider;
     this.engineManagerProvider = engineManagerProvider;
     this.auditRepositoryProvider = auditRepositoryProvider;
+    this.tradingRepositoryProvider = tradingRepositoryProvider;
+    this.userDataStreamManagerProvider = userDataStreamManagerProvider;
   }
 
   public static MembersInjector<TradingForegroundService> create(
@@ -64,8 +74,10 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
       Provider<OfflineQueueDao> offlineQueueDaoProvider,
       Provider<StrategyRunner> strategyRunnerProvider,
       Provider<EngineManager> engineManagerProvider,
-      Provider<AuditRepository> auditRepositoryProvider) {
-    return new TradingForegroundService_MembersInjector(webSocketManagerProvider, riskEngineProvider, tradeExecutorProvider, orderDaoProvider, offlineQueueDaoProvider, strategyRunnerProvider, engineManagerProvider, auditRepositoryProvider);
+      Provider<AuditRepository> auditRepositoryProvider,
+      Provider<TradingRepository> tradingRepositoryProvider,
+      Provider<UserDataStreamManager> userDataStreamManagerProvider) {
+    return new TradingForegroundService_MembersInjector(webSocketManagerProvider, riskEngineProvider, tradeExecutorProvider, orderDaoProvider, offlineQueueDaoProvider, strategyRunnerProvider, engineManagerProvider, auditRepositoryProvider, tradingRepositoryProvider, userDataStreamManagerProvider);
   }
 
   @Override
@@ -78,6 +90,8 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
     injectStrategyRunner(instance, strategyRunnerProvider.get());
     injectEngineManager(instance, engineManagerProvider.get());
     injectAuditRepository(instance, auditRepositoryProvider.get());
+    injectTradingRepository(instance, tradingRepositoryProvider.get());
+    injectUserDataStreamManager(instance, userDataStreamManagerProvider.get());
   }
 
   @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.webSocketManager")
@@ -124,5 +138,17 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
   public static void injectAuditRepository(TradingForegroundService instance,
       AuditRepository auditRepository) {
     instance.auditRepository = auditRepository;
+  }
+
+  @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.tradingRepository")
+  public static void injectTradingRepository(TradingForegroundService instance,
+      TradingRepository tradingRepository) {
+    instance.tradingRepository = tradingRepository;
+  }
+
+  @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.userDataStreamManager")
+  public static void injectUserDataStreamManager(TradingForegroundService instance,
+      UserDataStreamManager userDataStreamManager) {
+    instance.userDataStreamManager = userDataStreamManager;
   }
 }

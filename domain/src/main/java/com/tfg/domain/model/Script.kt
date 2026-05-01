@@ -29,7 +29,9 @@ enum class StrategyTemplateId {
     VOLUME_BREAKOUT,
     SCALPER_5M,
     SWING_15M,
-    TREND_1H
+    TREND_1H,
+    TFG_ALGO,
+    TFG_ALGO_PINE
 }
 
 data class StrategyTemplate(
@@ -81,12 +83,19 @@ data class BacktestTrade(
     val quantity: Double,
     val pnl: Double,
     val fees: Double,
-    val barsInTrade: Int = 0
+    val barsInTrade: Int = 0,
+    /** Why the position opened — e.g. "BUY signal", "SELL signal", "Strategy Long". */
+    val entryReason: String? = null,
+    /** Why the position closed — TP_HIT, SL_HIT, TRAIL_HIT, CLOSE, EOD, etc. */
+    val exitReason: String? = null
 )
 
 /** Export backtest results as CSV text (C5). */
 fun BacktestResult.toCsv(): String {
     val df = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+    // CSV is comma-delimited, so EVERY numeric format must use Locale.US;
+    // otherwise locales like de-DE produce "1,23" and corrupt the column count.
+    val L = java.util.Locale.US
     val sb = StringBuilder()
     // Summary section
     sb.appendLine("# Backtest Report")
@@ -94,19 +103,24 @@ fun BacktestResult.toCsv(): String {
     sb.appendLine("Timeframe,$timeframe")
     sb.appendLine("Period,${df.format(java.util.Date(startDate))} - ${df.format(java.util.Date(endDate))}")
     sb.appendLine("Total Trades,$totalTrades")
-    sb.appendLine("Win Rate,${String.format("%.2f", winRate)}%")
-    sb.appendLine("Total PnL,${String.format("%.2f", totalPnl)}")
-    sb.appendLine("Max Drawdown,${String.format("%.2f", maxDrawdown)}%")
-    sb.appendLine("Sharpe,${String.format("%.2f", sharpeRatio)}")
-    sb.appendLine("Sortino,${String.format("%.2f", sortinoRatio)}")
-    sb.appendLine("Profit Factor,${if (profitFactor == Double.MAX_VALUE) "Inf" else String.format("%.2f", profitFactor)}")
-    sb.appendLine("Expectancy,${String.format("%.2f", expectancy)}")
-    sb.appendLine("Buy & Hold,${String.format("%.2f", buyAndHoldReturn)}%")
+    sb.appendLine("Win Rate,${String.format(L, "%.2f", winRate)}%")
+    sb.appendLine("Total PnL,${String.format(L, "%.2f", totalPnl)}")
+    sb.appendLine("Max Drawdown,${String.format(L, "%.2f", maxDrawdown)}%")
+    sb.appendLine("Sharpe,${String.format(L, "%.2f", sharpeRatio)}")
+    sb.appendLine("Sortino,${String.format(L, "%.2f", sortinoRatio)}")
+    sb.appendLine("Profit Factor,${if (profitFactor == Double.MAX_VALUE) "Inf" else String.format(L, "%.2f", profitFactor)}")
+    sb.appendLine("Expectancy,${String.format(L, "%.2f", expectancy)}")
+    sb.appendLine("Buy & Hold,${String.format(L, "%.2f", buyAndHoldReturn)}%")
     sb.appendLine()
     // Trades section
-    sb.appendLine("EntryTime,ExitTime,Side,EntryPrice,ExitPrice,Quantity,PnL,Fees,BarsInTrade")
+    sb.appendLine("EntryTime,ExitTime,Side,EntryPrice,ExitPrice,Quantity,PnL,Fees,BarsInTrade,EntryReason,ExitReason")
     trades.forEach { t ->
-        sb.appendLine("${df.format(java.util.Date(t.entryTime))},${df.format(java.util.Date(t.exitTime))},${t.side},${t.entryPrice},${t.exitPrice},${t.quantity},${String.format("%.4f", t.pnl)},${String.format("%.4f", t.fees)},${t.barsInTrade}")
+        // CSV-escape reason fields in case they contain commas or quotes.
+        fun esc(s: String?): String {
+            val v = s ?: ""
+            return if (v.contains(',') || v.contains('"') || v.contains('\n')) "\"" + v.replace("\"", "\"\"") + "\"" else v
+        }
+        sb.appendLine("${df.format(java.util.Date(t.entryTime))},${df.format(java.util.Date(t.exitTime))},${t.side},${t.entryPrice},${t.exitPrice},${t.quantity},${String.format(L, "%.4f", t.pnl)},${String.format(L, "%.4f", t.fees)},${t.barsInTrade},${esc(t.entryReason)},${esc(t.exitReason)}")
     }
     return sb.toString()
 }
@@ -176,10 +190,12 @@ data class SignalMarker(
     val openTime: Long,
     val signalType: SignalType,
     val price: Double,
+    val label: String = "",
+    val orderType: String = "MARKET",
     val timestamp: Long = System.currentTimeMillis()
 )
 
-enum class SignalType { BUY, SELL, CLOSE }
+enum class SignalType { BUY, SELL, CLOSE, PAT_BUY, PAT_SELL, TP_HIT, SL_HIT }
 
 // ─── Custom Template (user-created presets) ─────────────────────────────
 
@@ -197,12 +213,15 @@ data class CustomTemplate(
 
 /**
  * Replace `val KEY = oldValue` in code with `val KEY = newValue`.
- * Preserves trailing comments.
+ * Preserves trailing comments. Only matches whitespace on the same line so a
+ * blank value cannot eat the next declaration. Empty/blank values are ignored
+ * (the editor field is allowed to be momentarily empty without corrupting code).
  */
 fun injectParamIntoCode(code: String, key: String, value: String): String {
+    if (value.isBlank()) return code
     return code.replace(
-        Regex("""((?:var|let|const|val)\s+${Regex.escape(key)}\s*=\s*)([^\s;/]+)"""),
-        "$1$value"
+        Regex("""((?:var|let|const|val)\s+${Regex.escape(key)}[ \t]*=[ \t]*)([^\s;/]+)"""),
+        "$1${Regex.escapeReplacement(value)}"
     )
 }
 

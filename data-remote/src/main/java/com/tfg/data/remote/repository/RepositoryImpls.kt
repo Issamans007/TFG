@@ -5,6 +5,7 @@ import com.tfg.data.local.mapper.EntityMapper.toDomain
 import com.tfg.data.local.mapper.EntityMapper.toEntity
 import com.tfg.data.remote.api.BinanceApi
 import com.tfg.data.remote.api.BinanceFuturesApi
+import com.tfg.data.remote.api.BinanceTimeSync
 import com.tfg.data.remote.interceptor.BinanceSigner
 import com.tfg.domain.model.*
 import com.tfg.domain.repository.*
@@ -24,6 +25,7 @@ class PortfolioRepositoryImpl @Inject constructor(
     private val assetBalanceDao: AssetBalanceDao,
     private val orderDao: OrderDao,
     private val auditLogDao: AuditLogDao,
+    private val timeSync: BinanceTimeSync,
     @Named("apiSecret") private val secretProvider: () -> String
 ) : PortfolioRepository {
 
@@ -85,10 +87,19 @@ class PortfolioRepositoryImpl @Inject constructor(
             )
         }
 
+    /** Build a fresh signed (timestamp, recvWindow, signature) triplet for a single Binance call. */
+    private suspend fun signed(extra: Map<String, String> = emptyMap()): Triple<Long, Long, String> {
+        val ts = timeSync.now()
+        val recv = BinanceTimeSync.RECV_WINDOW_MS
+        val params = LinkedHashMap<String, String>(extra.size + 2).apply {
+            putAll(extra)
+            put("timestamp", ts.toString())
+            put("recvWindow", recv.toString())
+        }
+        return Triple(ts, recv, BinanceSigner.signParams(params, secretProvider()))
+    }
+
     override suspend fun refreshPortfolio() {
-        val timestamp = System.currentTimeMillis()
-        val params = mapOf("timestamp" to timestamp.toString())
-        val signature = BinanceSigner.signParams(params, secretProvider())
         val errors = mutableListOf<String>()
 
         // ── Fetch all USDT prices in one call ──
@@ -114,7 +125,8 @@ class PortfolioRepositoryImpl @Inject constructor(
 
         // ── Spot wallet ──
         val spotEntities = try {
-            val account = binanceApi.getAccount(timestamp, signature)
+            val (ts, recv, sig) = signed()
+            val account = binanceApi.getAccount(ts, recv, sig)
             account.balances
                 .filter { it.free.toDouble() > 0 || it.locked.toDouble() > 0 }
                 .map { b ->
@@ -137,10 +149,8 @@ class PortfolioRepositoryImpl @Inject constructor(
 
         // ── Funding wallet ──
         val fundingEntities = try {
-            val ts2 = System.currentTimeMillis()
-            val p2 = mapOf("timestamp" to ts2.toString())
-            val sig2 = BinanceSigner.signParams(p2, secretProvider())
-            val funding = binanceApi.getFundingAsset(ts2, sig2)
+            val (ts2, recv2, sig2) = signed()
+            val funding = binanceApi.getFundingAsset(ts2, recv2, sig2)
             funding
                 .filter { it.free.toDouble() > 0 || it.locked.toDouble() > 0 || it.freeze.toDouble() > 0 }
                 .map { f ->
@@ -164,10 +174,8 @@ class PortfolioRepositoryImpl @Inject constructor(
 
         // ── Futures (USDT-M) wallet ──
         val futuresEntities = try {
-            val ts3 = System.currentTimeMillis()
-            val p3 = mapOf("timestamp" to ts3.toString())
-            val sig3 = BinanceSigner.signParams(p3, secretProvider())
-            val futures = binanceFuturesApi.getFuturesBalance(ts3, sig3)
+            val (ts3, recv3, sig3) = signed()
+            val futures = binanceFuturesApi.getFuturesBalance(ts3, recv3, sig3)
             futures
                 .filter { it.balance.toDouble() != 0.0 || it.availableBalance.toDouble() != 0.0 }
                 .map { f ->

@@ -1,0 +1,205 @@
+//@version=5
+// =============================================================================
+//  UT Bot  +  LinReg Candles  +  STC  [Merged v3]
+//
+//  Signal Tiers:
+//    Tier 1 — Strong  ✓✓ : UT Bot signal + LinReg confirms + STC at extreme
+//    Tier 2 — Weak    ✓  : UT Bot signal + LinReg confirms + STC neutral zone
+//    Tier 3 — Rejected✗  : UT Bot signal + LinReg disagrees
+//    Tier 4 — Strong  ✗✗ : UT Bot signal + LinReg disagrees + STC extreme opposite
+//
+//  When "Use STC as filter" is OFF → 2-layer mode:
+//    Approved  = UT Bot signal + LinReg confirms  (shown as Tier 1)
+//    Rejected  = UT Bot signal + LinReg disagrees (shown as Tier 3)
+//    Tiers 2 & 4 are suppressed.
+//
+//  NOTE — STC sub-pane: Pine Script v5 cannot produce a second pane from a
+//  single overlay=true indicator. The STC value is used for all signal logic
+//  and is visible in the Status Bar and Data Window (hover over the indicator
+//  name). To visualise the STC oscillator, add the standalone STC indicator.
+// =============================================================================
+
+indicator("UT Bot + LinReg + STC [v3]", shorttitle="ULSv3", overlay=true, max_labels_count=500)
+
+// ─── UT Bot Inputs ────────────────────────────────────────────────────────────
+grpUT   = "UT Bot"
+utKey   = input.float(1.0,  "Key Value (sensitivity)", minval=0.1, step=0.1,  group=grpUT)
+utAtr   = input.int(10,     "ATR Period",               minval=1,              group=grpUT)
+utHA    = input.bool(false, "Use Heikin Ashi candles",                         group=grpUT)
+
+// ─── LinReg Candles Inputs ────────────────────────────────────────────────────
+grpLR   = "LinReg Candles"
+lrLen   = input.int(11,    "Linear Regression Length", minval=1, maxval=200,   group=grpLR)
+sigLen  = input.int(11,    "Signal Smoothing Length",  minval=1, maxval=200,   group=grpLR)
+sigType = input.string("SMA", "Signal Type", options=["SMA","EMA"],            group=grpLR)
+useLR   = input.bool(true, "Apply Linear Regression (off = raw OHLC)",         group=grpLR)
+
+// ─── STC Inputs ───────────────────────────────────────────────────────────────
+grpSTC  = "STC — Schaff Trend Cycle"
+stcLen  = input.int(12,    "STC Length",        minval=1,                      group=grpSTC)
+stcFast = input.int(26,    "Fast EMA Length",   minval=1,                      group=grpSTC)
+stcSlow = input.int(50,    "Slow EMA Length",   minval=1,                      group=grpSTC)
+stcSmth = input.float(0.5, "Smooth Factor",     minval=0.01, maxval=1.0, step=0.05, group=grpSTC)
+stcOS   = input.float(25,  "Oversold Level",    minval=1,  maxval=49,          group=grpSTC)
+stcOB   = input.float(75,  "Overbought Level",  minval=51, maxval=99,          group=grpSTC)
+useSTC  = input.bool(true, "Use STC as filter  (off = 2-layer mode)",          group=grpSTC)
+
+// ─── Display Inputs ───────────────────────────────────────────────────────────
+grpD    = "Display"
+showT1  = input.bool(true,  "Show Strong Approved   (✓✓)", group=grpD)
+showT2  = input.bool(true,  "Show Weak Approved     (✓)",  group=grpD)
+showT3  = input.bool(true,  "Show Rejected          (✗)",  group=grpD)
+showT4  = input.bool(true,  "Show Strong Rejected   (✗✗)", group=grpD)
+cSBuy   = input.color(color.new(color.lime,    0),  "Strong Buy color",      group=grpD)
+cWBuy   = input.color(color.new(color.teal,    0),  "Weak Buy color",        group=grpD)
+cRej    = input.color(color.new(color.orange, 30),  "Rejected color",        group=grpD)
+cSRej   = input.color(color.new(color.maroon, 10),  "Strong Rejected color", group=grpD)
+cSSell  = input.color(color.new(color.red,     0),  "Strong Sell color",     group=grpD)
+cWSell  = input.color(color.new(color.fuchsia, 0),  "Weak Sell color",       group=grpD)
+lblStr  = input.string("small", "Label Size", options=["tiny","small","normal"], group=grpD)
+
+// ─── Bar Coloring Inputs ──────────────────────────────────────────────────────
+grpB    = "Bar Coloring"
+useBarC = input.bool(true,  "Enable UT Bot bar coloring", group=grpB)
+cBull   = input.color(color.new(color.green, 0), "Bull bar color", group=grpB)
+cBear   = input.color(color.new(color.red,   0), "Bear bar color", group=grpB)
+
+// ─── Label size constant ──────────────────────────────────────────────────────
+lblSz = lblStr == "tiny" ? size.tiny : lblStr == "normal" ? size.normal : size.small
+
+// ─── UT Bot Calculation ───────────────────────────────────────────────────────
+utSrc = utHA ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=barmerge.lookahead_off) : close
+
+xATR  = ta.atr(utAtr)
+nLoss = utKey * xATR
+
+var float xATS = 0.0
+xATS := utSrc > nz(xATS[1], 0) and utSrc[1] > nz(xATS[1], 0) ?
+     math.max(nz(xATS[1]), utSrc - nLoss) :
+     utSrc < nz(xATS[1], 0) and utSrc[1] < nz(xATS[1], 0) ?
+     math.min(nz(xATS[1]), utSrc + nLoss) :
+     utSrc > nz(xATS[1], 0) ?
+     utSrc - nLoss :
+     utSrc + nLoss
+
+var int utPos = 0
+utPos := utSrc[1] < nz(xATS[1], 0) and utSrc > nz(xATS[1], 0) ?  1 :
+     utSrc[1] > nz(xATS[1], 0) and utSrc < nz(xATS[1], 0) ? -1 :
+     nz(utPos[1], 0)
+
+ema1  = ta.ema(utSrc, 1)
+above = ta.crossover(ema1, xATS)
+below = ta.crossover(xATS, ema1)
+
+utBuy  = utSrc > xATS and above
+utSell = utSrc < xATS and below
+
+barbuy  = utSrc > xATS
+barsell = utSrc < xATS
+
+// ─── LinReg Candles ───────────────────────────────────────────────────────────
+bopen  = useLR ? ta.linreg(open,  lrLen, 0) : open
+bhigh  = useLR ? ta.linreg(high,  lrLen, 0) : high
+blow   = useLR ? ta.linreg(low,   lrLen, 0) : low
+bclose = useLR ? ta.linreg(close, lrLen, 0) : close
+
+isBull  = bopen < bclose
+sigLine = sigType == "SMA" ? ta.sma(bclose, sigLen) : ta.ema(bclose, sigLen)
+
+// ─── STC Calculation (self-contained) ────────────────────────────────────────
+// stcSmth replaces the internal input(0.5) from the original STC script.
+// var variables inside a function maintain per-call persistent state in v5.
+stcCalc(length, fast, slow, smooth) =>
+    macdLine = ta.ema(close, fast) - ta.ema(close, slow)
+    loMacd   = ta.lowest(macdLine,  length)
+    hiMacd   = ta.highest(macdLine, length) - loMacd
+    var float f1 = 0.0
+    var float d1 = 0.0
+    var float f2 = 0.0
+    var float d2 = 0.0
+    f1 := hiMacd > 0 ? (macdLine - loMacd) / hiMacd * 100 : nz(f1[1])
+    d1 := na(d1[1]) ? f1 : d1[1] + smooth * (f1 - d1[1])
+    loD1 = ta.lowest(d1,  length)
+    hiD1 = ta.highest(d1, length) - loD1
+    f2 := hiD1 > 0 ? (d1 - loD1) / hiD1 * 100 : nz(f2[1])
+    d2 := na(d2[1]) ? f2 : d2[1] + smooth * (f2 - d2[1])
+    d2
+
+stcVal    = stcCalc(stcLen, stcFast, stcSlow, stcSmth)
+stcRising = stcVal > stcVal[1]
+
+// ─── Signal Tier Logic ────────────────────────────────────────────────────────
+// --- Buy tiers (STC active) ---
+// t1 = strongest confirm; t2 = all other LinReg-confirming cases (catches gaps)
+t1Buy = utBuy and bclose >= sigLine and stcVal <  stcOS and stcRising
+t2Buy = utBuy and bclose >= sigLine and not (stcVal < stcOS and stcRising)
+t3Buy = utBuy and bclose <  sigLine and stcVal <= stcOB
+t4Buy = utBuy and bclose <  sigLine and stcVal >  stcOB
+
+// --- Sell tiers (STC active) ---
+// t1 = strongest confirm; t2 = all other LinReg-confirming cases (catches gaps)
+t1Sell = utSell and bclose <= sigLine and stcVal >  stcOB and not stcRising
+t2Sell = utSell and bclose <= sigLine and not (stcVal > stcOB and not stcRising)
+t3Sell = utSell and bclose >  sigLine and stcVal >= stcOS
+t4Sell = utSell and bclose >  sigLine and stcVal <  stcOS
+
+// --- 2-layer fallback (STC off) ---
+t1BuyFB  = utBuy  and bclose >= sigLine
+t3BuyFB  = utBuy  and bclose <  sigLine
+t1SellFB = utSell and bclose <= sigLine
+t3SellFB = utSell and bclose >  sigLine
+
+// --- Final resolved signals ---
+fin1Buy  = useSTC ? t1Buy  : t1BuyFB
+fin2Buy  = useSTC ? t2Buy  : false
+fin3Buy  = useSTC ? t3Buy  : t3BuyFB
+fin4Buy  = useSTC ? t4Buy  : false
+
+fin1Sell = useSTC ? t1Sell : t1SellFB
+fin2Sell = useSTC ? t2Sell : false
+fin3Sell = useSTC ? t3Sell : t3SellFB
+fin4Sell = useSTC ? t4Sell : false
+
+// ─── Plot: LinReg Candles ─────────────────────────────────────────────────────
+plotcandle(isBull ? bopen : na, isBull ? bhigh : na, isBull ? blow  : na, isBull ? bclose : na,
+           title="LinReg Bull", color=color.green, wickcolor=color.green, bordercolor=color.green)
+plotcandle(isBull ? na : bopen, isBull ? na : bhigh, isBull ? na : blow,  isBull ? na : bclose,
+           title="LinReg Bear", color=color.red,   wickcolor=color.red,   bordercolor=color.red)
+
+// ─── Plot: Signal Line ────────────────────────────────────────────────────────
+plot(sigLine, title="Signal Line", color=color.white, linewidth=1)
+
+// ─── Bar Coloring ─────────────────────────────────────────────────────────────
+barcolor(useBarC ? (barbuy ? cBull : barsell ? cBear : na) : na, title="UT Bar Color")
+
+// ─── Signal Labels — Buy (label.new accepts runtime size) ────────────────────
+if showT1 and fin1Buy
+    label.new(bar_index, low,  "Buy ✓✓", style=label.style_label_up,   color=cSBuy,  textcolor=color.white, size=lblSz)
+if showT2 and fin2Buy
+    label.new(bar_index, low,  "Buy ✓",  style=label.style_label_up,   color=cWBuy,  textcolor=color.white, size=lblSz)
+if showT3 and fin3Buy
+    label.new(bar_index, low,  "Buy ✗",  style=label.style_label_up,   color=cRej,   textcolor=color.white, size=lblSz)
+if showT4 and fin4Buy
+    label.new(bar_index, low,  "Buy ✗✗", style=label.style_label_up,   color=cSRej,  textcolor=color.white, size=lblSz)
+
+// ─── Signal Labels — Sell ────────────────────────────────────────────────────
+if showT1 and fin1Sell
+    label.new(bar_index, high, "Sell ✓✓", style=label.style_label_down, color=cSSell, textcolor=color.white, size=lblSz)
+if showT2 and fin2Sell
+    label.new(bar_index, high, "Sell ✓",  style=label.style_label_down, color=cWSell, textcolor=color.white, size=lblSz)
+if showT3 and fin3Sell
+    label.new(bar_index, high, "Sell ✗",  style=label.style_label_down, color=cRej,   textcolor=color.white, size=lblSz)
+if showT4 and fin4Sell
+    label.new(bar_index, high, "Sell ✗✗", style=label.style_label_down, color=cSRej,  textcolor=color.white, size=lblSz)
+
+// ─── STC — Status Line + Data Window ─────────────────────────────────────────
+// (A true sub-pane is not possible in overlay=true — add standalone STC separately)
+plot(stcVal, title="STC Value",      color=stcRising ? color.green : color.red, display=display.status_line + display.data_window)
+plot(stcOS,  title="STC Oversold",   color=color.new(color.gray, 50),           display=display.status_line + display.data_window)
+plot(stcOB,  title="STC Overbought", color=color.new(color.gray, 50),           display=display.status_line + display.data_window)
+
+// ─── Alerts ───────────────────────────────────────────────────────────────────
+alertcondition(fin1Buy,  title="Strong Buy",  message="[STRONG BUY] {{ticker}} {{interval}} @ {{close}} — All 3 confirmed")
+alertcondition(fin2Buy,  title="Weak Buy",    message="[WEAK BUY] {{ticker}} {{interval}} @ {{close}} — STC neutral")
+alertcondition(fin1Sell, title="Strong Sell", message="[STRONG SELL] {{ticker}} {{interval}} @ {{close}} — All 3 confirmed")
+alertcondition(fin2Sell, title="Weak Sell",   message="[WEAK SELL] {{ticker}} {{interval}} @ {{close}} — STC neutral")

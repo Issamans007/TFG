@@ -24,7 +24,7 @@ import com.tfg.data.local.entity.*
         AlertEntity::class,
         IndicatorEntity::class
     ],
-    version = 9,
+    version = 11,
     exportSchema = true
 )
 abstract class TfgDatabase : RoomDatabase() {
@@ -134,6 +134,24 @@ abstract class TfgDatabase : RoomDatabase() {
                         updatedAt INTEGER NOT NULL
                     )
                 """.trimIndent())
+            }
+        }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE signal_markers ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE signal_markers ADD COLUMN orderType TEXT NOT NULL DEFAULT 'MARKET'")
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE orders ADD COLUMN marketType TEXT NOT NULL DEFAULT 'SPOT'")
+                db.execSQL("ALTER TABLE orders ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE orders ADD COLUMN marginType TEXT NOT NULL DEFAULT 'ISOLATED'")
+                db.execSQL("ALTER TABLE orders ADD COLUMN positionSide TEXT NOT NULL DEFAULT 'BOTH'")
+                db.execSQL("ALTER TABLE orders ADD COLUMN reduceOnly INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE orders ADD COLUMN closePosition INTEGER NOT NULL DEFAULT 0")
             }
         }
 

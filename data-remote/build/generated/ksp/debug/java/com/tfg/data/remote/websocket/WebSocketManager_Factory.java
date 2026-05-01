@@ -1,6 +1,7 @@
 package com.tfg.data.remote.websocket;
 
 import com.google.gson.Gson;
+import com.tfg.data.remote.api.BinanceApi;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.Factory;
 import dagger.internal.QualifierMetadata;
@@ -28,23 +29,27 @@ public final class WebSocketManager_Factory implements Factory<WebSocketManager>
 
   private final Provider<Gson> gsonProvider;
 
+  private final Provider<BinanceApi> binanceApiProvider;
+
   public WebSocketManager_Factory(Provider<OkHttpClient> okHttpClientProvider,
-      Provider<Gson> gsonProvider) {
+      Provider<Gson> gsonProvider, Provider<BinanceApi> binanceApiProvider) {
     this.okHttpClientProvider = okHttpClientProvider;
     this.gsonProvider = gsonProvider;
+    this.binanceApiProvider = binanceApiProvider;
   }
 
   @Override
   public WebSocketManager get() {
-    return newInstance(okHttpClientProvider.get(), gsonProvider.get());
+    return newInstance(okHttpClientProvider.get(), gsonProvider.get(), binanceApiProvider.get());
   }
 
   public static WebSocketManager_Factory create(Provider<OkHttpClient> okHttpClientProvider,
-      Provider<Gson> gsonProvider) {
-    return new WebSocketManager_Factory(okHttpClientProvider, gsonProvider);
+      Provider<Gson> gsonProvider, Provider<BinanceApi> binanceApiProvider) {
+    return new WebSocketManager_Factory(okHttpClientProvider, gsonProvider, binanceApiProvider);
   }
 
-  public static WebSocketManager newInstance(OkHttpClient okHttpClient, Gson gson) {
-    return new WebSocketManager(okHttpClient, gson);
+  public static WebSocketManager newInstance(OkHttpClient okHttpClient, Gson gson,
+      BinanceApi binanceApi) {
+    return new WebSocketManager(okHttpClient, gson, binanceApi);
   }
 }

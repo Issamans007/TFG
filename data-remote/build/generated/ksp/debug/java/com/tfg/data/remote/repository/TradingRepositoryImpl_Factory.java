@@ -2,6 +2,9 @@ package com.tfg.data.remote.repository;
 
 import com.tfg.data.local.dao.OrderDao;
 import com.tfg.data.remote.api.BinanceApi;
+import com.tfg.data.remote.api.BinanceFuturesApi;
+import com.tfg.data.remote.api.BinanceTimeSync;
+import com.tfg.data.remote.api.ExchangeFiltersCache;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.Factory;
 import dagger.internal.QualifierMetadata;
@@ -27,29 +30,43 @@ import kotlin.jvm.functions.Function0;
 public final class TradingRepositoryImpl_Factory implements Factory<TradingRepositoryImpl> {
   private final Provider<BinanceApi> binanceApiProvider;
 
+  private final Provider<BinanceFuturesApi> binanceFuturesApiProvider;
+
   private final Provider<OrderDao> orderDaoProvider;
+
+  private final Provider<BinanceTimeSync> timeSyncProvider;
+
+  private final Provider<ExchangeFiltersCache> filtersProvider;
 
   private final Provider<Function0<String>> secretProvider;
 
   public TradingRepositoryImpl_Factory(Provider<BinanceApi> binanceApiProvider,
-      Provider<OrderDao> orderDaoProvider, Provider<Function0<String>> secretProvider) {
+      Provider<BinanceFuturesApi> binanceFuturesApiProvider, Provider<OrderDao> orderDaoProvider,
+      Provider<BinanceTimeSync> timeSyncProvider, Provider<ExchangeFiltersCache> filtersProvider,
+      Provider<Function0<String>> secretProvider) {
     this.binanceApiProvider = binanceApiProvider;
+    this.binanceFuturesApiProvider = binanceFuturesApiProvider;
     this.orderDaoProvider = orderDaoProvider;
+    this.timeSyncProvider = timeSyncProvider;
+    this.filtersProvider = filtersProvider;
     this.secretProvider = secretProvider;
   }
 
   @Override
   public TradingRepositoryImpl get() {
-    return newInstance(binanceApiProvider.get(), orderDaoProvider.get(), secretProvider.get());
+    return newInstance(binanceApiProvider.get(), binanceFuturesApiProvider.get(), orderDaoProvider.get(), timeSyncProvider.get(), filtersProvider.get(), secretProvider.get());
   }
 
   public static TradingRepositoryImpl_Factory create(Provider<BinanceApi> binanceApiProvider,
-      Provider<OrderDao> orderDaoProvider, Provider<Function0<String>> secretProvider) {
-    return new TradingRepositoryImpl_Factory(binanceApiProvider, orderDaoProvider, secretProvider);
+      Provider<BinanceFuturesApi> binanceFuturesApiProvider, Provider<OrderDao> orderDaoProvider,
+      Provider<BinanceTimeSync> timeSyncProvider, Provider<ExchangeFiltersCache> filtersProvider,
+      Provider<Function0<String>> secretProvider) {
+    return new TradingRepositoryImpl_Factory(binanceApiProvider, binanceFuturesApiProvider, orderDaoProvider, timeSyncProvider, filtersProvider, secretProvider);
   }
 
-  public static TradingRepositoryImpl newInstance(BinanceApi binanceApi, OrderDao orderDao,
-      Function0<String> secretProvider) {
-    return new TradingRepositoryImpl(binanceApi, orderDao, secretProvider);
+  public static TradingRepositoryImpl newInstance(BinanceApi binanceApi,
+      BinanceFuturesApi binanceFuturesApi, OrderDao orderDao, BinanceTimeSync timeSync,
+      ExchangeFiltersCache filters, Function0<String> secretProvider) {
+    return new TradingRepositoryImpl(binanceApi, binanceFuturesApi, orderDao, timeSync, filters, secretProvider);
   }
 }

@@ -1,6 +1,7 @@
 package com.tfg.feature.notifications;
 
 import com.tfg.domain.repository.AuditRepository;
+import com.tfg.domain.service.ConsoleBus;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.Factory;
 import dagger.internal.QualifierMetadata;
@@ -25,21 +26,26 @@ import javax.inject.Provider;
 public final class NotificationsViewModel_Factory implements Factory<NotificationsViewModel> {
   private final Provider<AuditRepository> auditRepositoryProvider;
 
-  public NotificationsViewModel_Factory(Provider<AuditRepository> auditRepositoryProvider) {
+  private final Provider<ConsoleBus> consoleBusProvider;
+
+  public NotificationsViewModel_Factory(Provider<AuditRepository> auditRepositoryProvider,
+      Provider<ConsoleBus> consoleBusProvider) {
     this.auditRepositoryProvider = auditRepositoryProvider;
+    this.consoleBusProvider = consoleBusProvider;
   }
 
   @Override
   public NotificationsViewModel get() {
-    return newInstance(auditRepositoryProvider.get());
+    return newInstance(auditRepositoryProvider.get(), consoleBusProvider.get());
   }
 
   public static NotificationsViewModel_Factory create(
-      Provider<AuditRepository> auditRepositoryProvider) {
-    return new NotificationsViewModel_Factory(auditRepositoryProvider);
+      Provider<AuditRepository> auditRepositoryProvider, Provider<ConsoleBus> consoleBusProvider) {
+    return new NotificationsViewModel_Factory(auditRepositoryProvider, consoleBusProvider);
   }
 
-  public static NotificationsViewModel newInstance(AuditRepository auditRepository) {
-    return new NotificationsViewModel(auditRepository);
+  public static NotificationsViewModel newInstance(AuditRepository auditRepository,
+      ConsoleBus consoleBus) {
+    return new NotificationsViewModel(auditRepository, consoleBus);
   }
 }

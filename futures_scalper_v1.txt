@@ -1,0 +1,743 @@
+//@version=5
+strategy("TFG FUTURES SCALPER v1", overlay=true,
+     margin_long=10, margin_short=10,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     pyramiding=0, calc_on_every_tick=false,
+     slippage=2, commission_type=strategy.commission.percent, commission_value=0.04,
+     process_orders_on_close=false, max_bars_back=500)
+
+// ============================================================
+//  FUTURES SCALP — LONG + SHORT — NON-REPAINTING
+//  Optimised for 3m / 5m BTC/ETH/BNB USDT-M on Binance Futures
+//
+//  Non-repaint: calc_on_every_tick=false, process_orders_on_close=false,
+//  request.security with [1] + lookahead_off. All signals on bar close.
+//
+//  Key differences from spot:
+//   • Long + Short entries with mirrored confluence scoring
+//   • Leverage-aware position sizing (margin_long/short = 10 → 10x)
+//   • Tighter SL/TP suited for futures scalps
+//   • Commission 0.04% (Binance Futures maker)
+//   • Resistance blocks longs; Support blocks shorts
+//   • Bearish divergence blocks longs; Bullish divergence blocks shorts
+//   • Per-trade TP/SL/entry lines for both sides
+//
+//  All known bugs from spot v4 pre-fixed:
+//   • nearResistance/nearSupport guarded with directional price check
+//   • Consecutive loss tracker fires once per new trade, not every bar
+//   • TP1 exit stops resubmitting after partial fill (tp1Hit flag)
+//   • Volume SMA excludes current bar (volume[1])
+//   • S/R levels expire after srMaxAge bars
+//   • SL/TP locked from position_avg_price, not close
+//   • Trail activation ≠ trail offset (separate params)
+// ============================================================
+
+// ===========================
+//  1. INPUTS
+// ===========================
+
+// -- Risk Management --
+riskPct       = input.float(1.0,  "Risk % Per Trade",           minval=0.1,  maxval=5.0,  step=0.1,  group="Risk Management")
+slPct         = input.float(0.2,  "Stop Loss %",                minval=0.05, maxval=1.0,  step=0.05, group="Risk Management")
+tp1Pct        = input.float(0.3,  "TP1 %",                      minval=0.1,  maxval=2.0,  step=0.05, group="Risk Management")
+tp2Pct        = input.float(0.6,  "TP2 %",                      minval=0.1,  maxval=3.0,  step=0.1,  group="Risk Management")
+tp1ClosePct   = input.int(50,     "TP1 Close % of Position",    minval=10,   maxval=90,              group="Risk Management")
+useTrail      = input.bool(true,  "Enable Trailing Stop",                                             group="Risk Management")
+trailPct      = input.float(0.25, "Trail Activation %",         minval=0.05, maxval=2.0,  step=0.05, group="Risk Management")
+trailOffset   = input.float(0.12, "Trail Offset %",             minval=0.05, maxval=1.0,  step=0.05, group="Risk Management")
+
+// -- Moving Averages --
+emaFastLen    = input.int(8,   "Fast EMA",                      minval=2,                 group="Moving Averages")
+emaSlowLen    = input.int(18,  "Slow EMA",                      minval=5,                 group="Moving Averages")
+emaTrendLen   = input.int(40,  "Trend EMA",                     minval=10,                group="Moving Averages")
+emaSlopeLen   = input.int(4,   "EMA Slope Lookback (bars)",     minval=2,  maxval=20,     group="Moving Averages")
+
+// -- RSI --
+rsiLen        = input.int(7,  "RSI Length",                     minval=2,                 group="RSI")
+rsiOB         = input.int(72, "RSI Overbought",                                           group="RSI")
+rsiOS         = input.int(28, "RSI Oversold",                                             group="RSI")
+rsiDivLookback= input.int(5,  "RSI Divergence Lookback",       minval=3, maxval=20,      group="RSI")
+
+// -- MACD --
+macdFast      = input.int(8,  "MACD Fast",                     group="MACD")
+macdSlow      = input.int(21, "MACD Slow",                     group="MACD")
+macdSig       = input.int(5,  "MACD Signal",                   group="MACD")
+
+// -- Volume --
+volLen        = input.int(14,    "Volume SMA Length",           group="Volume")
+volMult       = input.float(1.3, "Volume Spike Multiplier",    step=0.1,                 group="Volume")
+
+// -- VWAP --
+useVWAP       = input.bool(true, "Use VWAP Bias Filter",       group="VWAP")
+
+// -- S/R Levels --
+useSR          = input.bool(true,  "Use S/R Levels",                                      group="S/R Levels")
+srLookback     = input.int(20,    "S/R Lookback Bars",          minval=5,  maxval=100,    group="S/R Levels")
+srProximity    = input.float(0.15, "Support Proximity %",       minval=0.05, maxval=0.5,  step=0.05, group="S/R Levels")
+resistProxPct  = input.float(0.15, "Resistance Block %",        minval=0.05, maxval=1.0,  step=0.05, group="S/R Levels")
+
+// -- ADX --
+adxLen        = input.int(10, "ADX Length",                     minval=5,                 group="ADX")
+adxMin        = input.int(15, "ADX Minimum",                                              group="ADX")
+
+// -- HTF Trend --
+useHTF        = input.bool(true,  "Use HTF Trend Filter",                                 group="HTF")
+htfTF         = input.timeframe("15", "Higher Timeframe",                                  group="HTF")
+
+// -- Session --
+useSess       = input.bool(false, "Enable Session Filter",                                 group="Session")
+sessStart     = input.int(8,  "Session Start Hour",             minval=0, maxval=23,      group="Session")
+sessEnd       = input.int(20, "Session End Hour",               minval=0, maxval=23,      group="Session")
+
+// -- Filters --
+minBuyScore       = input.int(6,  "Min Long Score (out of 10)",   minval=3, maxval=10,    group="Filters")
+minSellScore      = input.int(6,  "Min Short Score (out of 10)",  minval=3, maxval=10,    group="Filters")
+entryCooldownBars = input.int(3,  "Entry Cooldown (bars)",         minval=1,               group="Filters")
+exitCooldownBars  = input.int(1,  "Exit Cooldown (bars)",          minval=0,               group="Filters")
+consLossMax       = input.int(2,  "Max Consecutive Losses",        minval=1, maxval=5,     group="Filters")
+consLossCooldown  = input.int(10, "Consecutive Loss Cooldown",     minval=3, maxval=50,    group="Filters")
+dedupBars         = input.int(4,  "Signal Dedup Window (bars)",    minval=2, maxval=20,    group="Filters")
+atrMoveMult       = input.float(0.3, "Min Candle Range (× ATR)",  minval=0.1, maxval=2.0, step=0.1, group="Filters")
+
+// -- Visuals --
+showLines     = input.bool(true, "Show TP/SL Lines Per Trade",    group="Visuals")
+lineWidth     = input.int(1,     "TP/SL Line Width",   minval=1, maxval=3, group="Visuals")
+
+// ===========================
+//  2. INDICATORS
+// ===========================
+
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+emaTrend = ta.ema(close, emaTrendLen)
+vwapVal  = ta.vwap(hlc3)
+rsi      = ta.rsi(close, rsiLen)
+atr      = ta.atr(14)
+
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+[diPlus, diMinus, adx]           = ta.dmi(adxLen, adxLen)
+
+volAvg   = ta.sma(volume[1], volLen)   // exclude current bar
+volSpike = volume > volAvg * volMult
+
+candleBody  = math.abs(close - open)
+candleRange = high - low
+bodyRatio   = candleRange > 0 ? candleBody / candleRange : 0
+upperWick   = high - math.max(close, open)
+lowerWick   = math.min(close, open) - low
+
+// ===========================
+//  2a. S/R LEVELS (with expiry)
+// ===========================
+
+pivotLow  = ta.pivotlow(low, 5, 5)
+pivotHigh = ta.pivothigh(high, 5, 5)
+
+var float supportLevel     = na
+var float resistanceLevel  = na
+var int   supportSetBar    = 0
+var int   resistanceSetBar = 0
+
+if not na(pivotLow)
+    supportLevel  := pivotLow
+    supportSetBar := bar_index
+if not na(pivotHigh)
+    resistanceLevel  := pivotHigh
+    resistanceSetBar := bar_index
+
+srMaxAge = srLookback * 3
+if bar_index - supportSetBar > srMaxAge
+    supportLevel := na
+if bar_index - resistanceSetBar > srMaxAge
+    resistanceLevel := na
+
+// Proximity checks (directional guards prevent inverted logic)
+nearSupport    = useSR and not na(supportLevel)    and close > supportLevel    ? (close - supportLevel)    / close * 100 < srProximity   : false
+nearResistance = useSR and not na(resistanceLevel) and close < resistanceLevel ? (resistanceLevel - close) / close * 100 < resistProxPct : false
+
+// ===========================
+//  2b. CANDLE PATTERNS
+// ===========================
+
+// Bullish
+bullEngulf  = close > open and close[1] < open[1] and close > open[1] and open < close[1] and bodyRatio > 0.5
+bullPinBar  = lowerWick > candleBody * 2 and upperWick < candleBody and close > open and bodyRatio > 0.2 and close > open[1] * 0.995
+strongBull  = close > open and bodyRatio > 0.6 and upperWick < candleBody * 0.3
+bullPattern = bullEngulf or bullPinBar or strongBull
+bullCandle  = close > open and bodyRatio > 0.35
+
+// Bearish
+bearEngulf  = close < open and close[1] > open[1] and close < open[1] and open > close[1] and bodyRatio > 0.5
+bearPinBar  = upperWick > candleBody * 2 and lowerWick < candleBody and close < open and bodyRatio > 0.2 and close < open[1] * 1.005
+strongBear  = close < open and bodyRatio > 0.6 and lowerWick < candleBody * 0.3
+bearPattern = bearEngulf or bearPinBar or strongBear
+bearCandle  = close < open and bodyRatio > 0.35
+
+// ===========================
+//  2c. HTF — NON-REPAINTING
+// ===========================
+
+htfEmaFast = request.security(syminfo.tickerid, htfTF, ta.ema(close, emaFastLen)[1], lookahead=barmerge.lookahead_off)
+htfEmaSlow = request.security(syminfo.tickerid, htfTF, ta.ema(close, emaSlowLen)[1], lookahead=barmerge.lookahead_off)
+htfBull    = useHTF ? htfEmaFast > htfEmaSlow : true
+htfBear    = useHTF ? htfEmaFast < htfEmaSlow : true
+
+// ===========================
+//  2d. SESSION
+// ===========================
+
+inSession = useSess ? (hour(time, syminfo.timezone) >= sessStart and hour(time, syminfo.timezone) < sessEnd) : true
+
+// ===========================
+//  2e. RSI DIVERGENCE
+// ===========================
+
+// Bearish divergence — blocks longs
+priceHH    = high > ta.highest(high[1], rsiDivLookback)
+rsiHH      = rsi  > ta.highest(rsi[1],  rsiDivLookback)
+rsiBearDiv = priceHH and not rsiHH and rsi < rsiOB - 5
+
+// Bullish divergence — blocks shorts
+priceLL    = low < ta.lowest(low[1], rsiDivLookback)
+rsiLL      = rsi < ta.lowest(rsi[1], rsiDivLookback)
+rsiBullDiv = priceLL and not rsiLL and rsi > rsiOS + 5
+
+// ===========================
+//  2f. TREND EMA SLOPE FILTER
+// ===========================
+
+emaTrendRising  = emaTrend > emaTrend[emaSlopeLen]
+emaTrendFalling = emaTrend < emaTrend[emaSlopeLen]
+
+// ===========================
+//  2g. ATR MOVE FILTER
+// ===========================
+
+atrMoveOK = candleRange >= atr * atrMoveMult
+
+// ===========================
+//  3. CONFLUENCE SCORE — LONG SIDE
+// ===========================
+
+emaCrossUp = ta.crossover(emaFast, emaSlow)
+
+c_trend_L    = close > emaTrend ? 1 : 0
+c_vwap_L     = (useVWAP ? close > vwapVal : true) ? 1 : 0
+c_volume_L   = volSpike ? 1 : 0
+c_rsi_L      = (rsi > rsiOS and rsi < rsiOB) ? 1 : 0
+c_macd_L     = (macdLine > signalLine and macdHist > macdHist[1]) ? 1 : 0
+c_candle_L   = bullCandle ? 1 : 0
+c_support_L  = nearSupport ? 1 : 0
+c_di_L       = (diPlus > diMinus) ? 1 : 0
+c_adx_L      = (adx > adxMin) ? 1 : 0
+c_breakout_L = (close > ta.highest(high[1], 3)) ? 1 : 0
+
+longScore = c_trend_L + c_vwap_L + c_volume_L + c_rsi_L + c_macd_L + c_candle_L + c_support_L + c_di_L + c_adx_L + c_breakout_L
+
+// ===========================
+//  3b. CONFLUENCE SCORE — SHORT SIDE
+// ===========================
+
+emaCrossDown = ta.crossunder(emaFast, emaSlow)
+
+c_trend_S    = close < emaTrend ? 1 : 0
+c_vwap_S     = (useVWAP ? close < vwapVal : true) ? 1 : 0
+c_volume_S   = volSpike ? 1 : 0
+c_rsi_S      = (rsi > rsiOS and rsi < rsiOB) ? 1 : 0
+c_macd_S     = (macdLine < signalLine and macdHist < macdHist[1]) ? 1 : 0
+c_candle_S   = bearCandle ? 1 : 0
+c_resist_S   = nearResistance ? 1 : 0
+c_di_S       = (diMinus > diPlus) ? 1 : 0
+c_adx_S      = (adx > adxMin) ? 1 : 0
+c_breakdown_S= (close < ta.lowest(low[1], 3)) ? 1 : 0
+
+shortScore = c_trend_S + c_vwap_S + c_volume_S + c_rsi_S + c_macd_S + c_candle_S + c_resist_S + c_di_S + c_adx_S + c_breakdown_S
+
+// ===========================
+//  4. COOLDOWN & LOSS TRACKING
+// ===========================
+
+var int lastEntryBar      = 0
+var int lastExitBar       = -100
+var int lastSignalBar     = -100
+var int consLosses        = 0
+var int consLossPauseBar  = 0
+var int prevClosedTrades  = 0
+
+consLossBlocked = consLosses >= consLossMax and (bar_index - consLossPauseBar) < consLossCooldown
+
+entryCooldownOK = bar_index - lastEntryBar  >= entryCooldownBars
+exitCooldownOK  = bar_index - lastExitBar   >= exitCooldownBars
+dedupOK         = bar_index - lastSignalBar >= dedupBars
+cooldownOK      = entryCooldownOK and exitCooldownOK and dedupOK and not consLossBlocked
+
+// ===========================
+//  5. ENTRY SIGNALS
+// ===========================
+
+flat = strategy.position_size == 0
+
+// --- LONG ---
+longGuards = htfBull and cooldownOK and inSession and flat
+             and emaTrendRising
+             and not nearResistance
+             and not rsiBearDiv
+             and atrMoveOK
+
+longCross   = emaCrossUp   and longScore >= minBuyScore  and longGuards
+longPattern = bullPattern   and not emaCrossUp and longScore >= 8 and longGuards
+finalLong   = longCross or longPattern
+
+// --- SHORT ---
+shortGuards = htfBear and cooldownOK and inSession and flat
+              and emaTrendFalling
+              and not nearSupport
+              and not rsiBullDiv
+              and atrMoveOK
+
+shortCross   = emaCrossDown and shortScore >= minSellScore and shortGuards
+shortPattern = bearPattern  and not emaCrossDown and shortScore >= 8 and shortGuards
+finalShort   = shortCross or shortPattern
+
+// ===========================
+//  6. VAR STATE — LEVELS & LINES
+// ===========================
+
+var float posSL              = na
+var float posTP1             = na
+var float posTP2             = na
+var float trailTicksLocked   = na
+var float trailOffsetLocked  = na
+var bool  tp1Hit             = false
+var int   tradeDir           = 0      // +1 long, -1 short, 0 flat
+
+var line  slLine  = na
+var line  tp1Line = na
+var line  tp2Line = na
+var line  entLine = na
+
+// ===========================
+//  7. EXIT CONDITIONS — LONG
+// ===========================
+
+emaSellCross  = ta.crossunder(emaFast, emaSlow)
+trendBreakDn  = close < emaTrend and close[1] >= emaTrend
+rsiExhaustOB  = rsi[1] >= rsiOB and rsi < rsiOB
+macdBearCross = ta.crossunder(macdLine, signalLine)
+diFlipBear    = diMinus > diPlus and diPlus[1] >= diMinus[1]
+belowVWAP     = useVWAP and close < vwapVal and close[1] >= vwapVal
+
+longExitCount = (emaSellCross ? 1 : 0) + (trendBreakDn ? 1 : 0) + (rsiExhaustOB ? 1 : 0) + (macdBearCross ? 1 : 0) + (diFlipBear ? 1 : 0) + (belowVWAP ? 1 : 0)
+longSellSig   = longExitCount >= 2 and strategy.position_size > 0
+longStrongSel = emaSellCross and close < emaTrend and strategy.position_size > 0
+
+// ===========================
+//  7b. EXIT CONDITIONS — SHORT
+// ===========================
+
+emaBuyCross   = ta.crossover(emaFast, emaSlow)
+trendBreakUp  = close > emaTrend and close[1] <= emaTrend
+rsiExhaustOS  = rsi[1] <= rsiOS and rsi > rsiOS
+macdBullCross = ta.crossover(macdLine, signalLine)
+diFlipBull    = diPlus > diMinus and diMinus[1] >= diPlus[1]
+aboveVWAP     = useVWAP and close > vwapVal and close[1] <= vwapVal
+
+shortExitCount = (emaBuyCross ? 1 : 0) + (trendBreakUp ? 1 : 0) + (rsiExhaustOS ? 1 : 0) + (macdBullCross ? 1 : 0) + (diFlipBull ? 1 : 0) + (aboveVWAP ? 1 : 0)
+shortCoverSig  = shortExitCount >= 2 and strategy.position_size < 0
+shortStrongCov = emaBuyCross and close > emaTrend and strategy.position_size < 0
+
+// ===========================
+//  8. POSITION SIZING
+// ===========================
+
+capitalRisk  = strategy.equity * (riskPct / 100)
+slDistance   = close * (slPct / 100)
+positionSize = slDistance > 0 ? capitalRisk / slDistance : 0
+finalQty     = math.min(positionSize, strategy.equity / close)
+
+// ===========================
+//  9. EXECUTION
+// ===========================
+
+// Helper: delete all trade lines and reset levels
+resetTradeState() =>
+    _sl  = na(0.0)  // dummy to keep type
+    [_sl]
+
+// --- LONG ENTRY ---
+if finalLong
+    lastEntryBar  := bar_index
+    lastSignalBar := bar_index
+    tradeDir      := 1
+    strategy.entry("Long", strategy.long, qty=finalQty)
+
+// --- SHORT ENTRY ---
+if finalShort
+    lastEntryBar  := bar_index
+    lastSignalBar := bar_index
+    tradeDir      := -1
+    strategy.entry("Short", strategy.short, qty=finalQty)
+
+// --- LOCK LEVELS on first bar of new LONG position ---
+if strategy.position_size > 0 and na(posSL) and tradeDir == 1
+    float ap        = strategy.position_avg_price
+    posSL              := ap * (1 - slPct       / 100)
+    posTP1             := ap * (1 + tp1Pct      / 100)
+    posTP2             := ap * (1 + tp2Pct      / 100)
+    trailTicksLocked   := math.max(math.round(ap * (trailPct    / 100) / syminfo.mintick), 1)
+    trailOffsetLocked  := math.max(math.round(ap * (trailOffset / 100) / syminfo.mintick), 1)
+
+    if showLines
+        if not na(slLine)
+            line.delete(slLine)
+        if not na(tp1Line)
+            line.delete(tp1Line)
+        if not na(tp2Line)
+            line.delete(tp2Line)
+        if not na(entLine)
+            line.delete(entLine)
+        entLine := line.new(bar_index, ap,     bar_index + 60, ap,     color=color.new(color.yellow, 0), width=lineWidth, style=line.style_dashed)
+        slLine  := line.new(bar_index, posSL,  bar_index + 60, posSL,  color=color.new(color.red,    0), width=lineWidth, style=line.style_solid)
+        tp1Line := line.new(bar_index, posTP1, bar_index + 60, posTP1, color=color.new(color.lime,   0), width=lineWidth, style=line.style_dotted)
+        tp2Line := line.new(bar_index, posTP2, bar_index + 60, posTP2, color=color.new(color.teal,   0), width=lineWidth, style=line.style_solid)
+        label.new(bar_index + 2, posSL,  "SL "  + str.tostring(posSL,  "#.##"), color=color.new(color.red,  80), textcolor=color.red,  style=label.style_label_right, size=size.tiny)
+        label.new(bar_index + 2, posTP1, "TP1 " + str.tostring(posTP1, "#.##"), color=color.new(color.lime, 80), textcolor=color.lime, style=label.style_label_right, size=size.tiny)
+        label.new(bar_index + 2, posTP2, "TP2 " + str.tostring(posTP2, "#.##"), color=color.new(color.teal, 80), textcolor=color.teal, style=label.style_label_right, size=size.tiny)
+
+// --- LOCK LEVELS on first bar of new SHORT position ---
+if strategy.position_size < 0 and na(posSL) and tradeDir == -1
+    float ap        = strategy.position_avg_price
+    posSL              := ap * (1 + slPct       / 100)
+    posTP1             := ap * (1 - tp1Pct      / 100)
+    posTP2             := ap * (1 - tp2Pct      / 100)
+    trailTicksLocked   := math.max(math.round(ap * (trailPct    / 100) / syminfo.mintick), 1)
+    trailOffsetLocked  := math.max(math.round(ap * (trailOffset / 100) / syminfo.mintick), 1)
+
+    if showLines
+        if not na(slLine)
+            line.delete(slLine)
+        if not na(tp1Line)
+            line.delete(tp1Line)
+        if not na(tp2Line)
+            line.delete(tp2Line)
+        if not na(entLine)
+            line.delete(entLine)
+        entLine := line.new(bar_index, ap,     bar_index + 60, ap,     color=color.new(color.yellow, 0), width=lineWidth, style=line.style_dashed)
+        slLine  := line.new(bar_index, posSL,  bar_index + 60, posSL,  color=color.new(color.red,    0), width=lineWidth, style=line.style_solid)
+        tp1Line := line.new(bar_index, posTP1, bar_index + 60, posTP1, color=color.new(color.lime,   0), width=lineWidth, style=line.style_dotted)
+        tp2Line := line.new(bar_index, posTP2, bar_index + 60, posTP2, color=color.new(color.teal,   0), width=lineWidth, style=line.style_solid)
+        label.new(bar_index + 2, posSL,  "SL "  + str.tostring(posSL,  "#.##"), color=color.new(color.red,  80), textcolor=color.red,  style=label.style_label_right, size=size.tiny)
+        label.new(bar_index + 2, posTP1, "TP1 " + str.tostring(posTP1, "#.##"), color=color.new(color.lime, 80), textcolor=color.lime, style=label.style_label_right, size=size.tiny)
+        label.new(bar_index + 2, posTP2, "TP2 " + str.tostring(posTP2, "#.##"), color=color.new(color.teal, 80), textcolor=color.teal, style=label.style_label_right, size=size.tiny)
+
+// --- DETECT TP1 HIT (partial fill) ---
+if strategy.position_size != 0 and math.abs(strategy.position_size) < math.abs(strategy.position_size[1]) and not na(posTP1)
+    tp1Hit := true
+
+// --- SUBMIT EXIT ORDERS — LONG ---
+if strategy.position_size > 0 and not na(posSL)
+    if not tp1Hit
+        strategy.exit("TP1_L", "Long", qty_percent=tp1ClosePct, stop=posSL, limit=posTP1)
+    if useTrail
+        strategy.exit("TP2_L", "Long",
+             stop         = posSL,
+             limit        = posTP2,
+             trail_points = trailTicksLocked,
+             trail_offset = trailOffsetLocked)
+    else
+        strategy.exit("TP2_L", "Long", stop=posSL, limit=posTP2)
+
+// --- SUBMIT EXIT ORDERS — SHORT ---
+if strategy.position_size < 0 and not na(posSL)
+    if not tp1Hit
+        strategy.exit("TP1_S", "Short", qty_percent=tp1ClosePct, stop=posSL, limit=posTP1)
+    if useTrail
+        strategy.exit("TP2_S", "Short",
+             stop         = posSL,
+             limit        = posTP2,
+             trail_points = trailTicksLocked,
+             trail_offset = trailOffsetLocked)
+    else
+        strategy.exit("TP2_S", "Short", stop=posSL, limit=posTP2)
+
+// --- MANUAL CLOSE — LONG ---
+if longSellSig or longStrongSel
+    strategy.close("Long", comment=longStrongSel ? "STRONG SELL" : "SELL EXIT")
+    lastExitBar := bar_index
+    if not na(slLine)
+        line.delete(slLine)
+        slLine := na
+    if not na(tp1Line)
+        line.delete(tp1Line)
+        tp1Line := na
+    if not na(tp2Line)
+        line.delete(tp2Line)
+        tp2Line := na
+    if not na(entLine)
+        line.delete(entLine)
+        entLine := na
+    posSL             := na
+    posTP1            := na
+    posTP2            := na
+    trailTicksLocked  := na
+    trailOffsetLocked := na
+    tp1Hit            := false
+    tradeDir          := 0
+
+// --- MANUAL CLOSE — SHORT ---
+if shortCoverSig or shortStrongCov
+    strategy.close("Short", comment=shortStrongCov ? "STRONG COVER" : "COVER EXIT")
+    lastExitBar := bar_index
+    if not na(slLine)
+        line.delete(slLine)
+        slLine := na
+    if not na(tp1Line)
+        line.delete(tp1Line)
+        tp1Line := na
+    if not na(tp2Line)
+        line.delete(tp2Line)
+        tp2Line := na
+    if not na(entLine)
+        line.delete(entLine)
+        entLine := na
+    posSL             := na
+    posTP1            := na
+    posTP2            := na
+    trailTicksLocked  := na
+    trailOffsetLocked := na
+    tp1Hit            := false
+    tradeDir          := 0
+
+// --- POSITION CLOSED VIA SL/TP — auto-reset ---
+if strategy.position_size == 0 and not na(posSL)
+    lastExitBar := bar_index
+    if not na(slLine)
+        line.delete(slLine)
+        slLine := na
+    if not na(tp1Line)
+        line.delete(tp1Line)
+        tp1Line := na
+    if not na(tp2Line)
+        line.delete(tp2Line)
+        tp2Line := na
+    if not na(entLine)
+        line.delete(entLine)
+        entLine := na
+    posSL             := na
+    posTP1            := na
+    posTP2            := na
+    trailTicksLocked  := na
+    trailOffsetLocked := na
+    tp1Hit            := false
+    tradeDir          := 0
+
+// --- CONSECUTIVE LOSS TRACKER (once per new trade close) ---
+if strategy.closedtrades > prevClosedTrades
+    prevClosedTrades := strategy.closedtrades
+    float lastPnl = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if lastPnl < 0
+        consLosses       := consLosses + 1
+        consLossPauseBar := bar_index
+    else if lastPnl > 0
+        consLosses := 0
+
+// ===========================
+//  10. VISUALS
+// ===========================
+
+p1 = plot(emaFast,  "Fast EMA",  color.new(color.lime,   0), 1)
+p2 = plot(emaSlow,  "Slow EMA",  color.new(color.orange, 0), 1)
+plot(emaTrend, "Trend EMA", color.new(color.white, 30), 2)
+fill(p1, p2, color=emaFast > emaSlow ? color.new(color.green, 85) : color.new(color.red, 85))
+
+plot(useVWAP ? vwapVal : na, "VWAP", color.new(color.fuchsia, 0), 2, plot.style_cross)
+plot(useSR and not na(supportLevel)    ? supportLevel    : na, "Support",    color.new(color.aqua, 30), 1, plot.style_stepline_diamond)
+plot(useSR and not na(resistanceLevel) ? resistanceLevel : na, "Resistance", color.new(color.red,  30), 1, plot.style_stepline_diamond)
+
+// Long signals
+plotshape(longCross,   "LONG (Cross)",   shape.triangleup,   location.belowbar, color.new(color.lime, 0), size=size.small, text="LONG")
+plotshape(longPattern, "LONG (Pattern)", shape.diamond,       location.belowbar, color.new(color.aqua, 0), size=size.small, text="PAT\nLONG")
+
+// Short signals
+plotshape(shortCross,   "SHORT (Cross)",   shape.triangledown, location.abovebar, color.new(color.red,    0), size=size.small, text="SHORT")
+plotshape(shortPattern, "SHORT (Pattern)", shape.diamond,       location.abovebar, color.new(color.orange, 0), size=size.small, text="PAT\nSHORT")
+
+// Close signals
+plotshape(longSellSig or longStrongSel,   "Close Long",  shape.xcross, location.abovebar, color.new(color.red,   0), size=size.tiny, text="×L")
+plotshape(shortCoverSig or shortStrongCov, "Close Short", shape.xcross, location.belowbar, color.new(color.lime,  0), size=size.tiny, text="×S")
+
+// Blocked signal markers
+suppressedLong  = (emaCrossUp or bullPattern) and flat and not finalLong
+suppressedShort = (emaCrossDown or bearPattern) and flat and not finalShort
+plotshape(suppressedLong  and not emaTrendRising,  "Blk:Slope↑", shape.xcross, location.belowbar, color.new(color.gray,   40), size=size.tiny, text="↗?")
+plotshape(suppressedLong  and nearResistance,       "Blk:Resist", shape.xcross, location.belowbar, color.new(color.orange, 40), size=size.tiny, text="R↑")
+plotshape(suppressedLong  and rsiBearDiv,           "Blk:BearDiv",shape.xcross, location.belowbar, color.new(color.purple, 40), size=size.tiny, text="DIV")
+plotshape(suppressedShort and not emaTrendFalling,  "Blk:Slope↓", shape.xcross, location.abovebar, color.new(color.gray,   40), size=size.tiny, text="↘?")
+plotshape(suppressedShort and nearSupport,          "Blk:Supp",   shape.xcross, location.abovebar, color.new(color.orange, 40), size=size.tiny, text="S↓")
+plotshape(suppressedShort and rsiBullDiv,           "Blk:BullDiv",shape.xcross, location.abovebar, color.new(color.purple, 40), size=size.tiny, text="DIV")
+
+// Background tints
+bgcolor(finalLong  ? color.new(color.lime, 90) : na)
+bgcolor(finalShort ? color.new(color.red,  90) : na)
+bgcolor(consLossBlocked ? color.new(color.orange, 95) : na)
+
+// Candle pattern markers (non-entry)
+plotshape(bullEngulf and not finalLong,  "Engulf↑", shape.arrowup,   location.belowbar, color.new(color.yellow, 50), size=size.tiny)
+plotshape(bullPinBar and not finalLong,  "Pin↑",    shape.circle,    location.belowbar, color.new(color.aqua,   50), size=size.tiny)
+plotshape(bearEngulf and not finalShort, "Engulf↓", shape.arrowdown, location.abovebar, color.new(color.yellow, 50), size=size.tiny)
+plotshape(bearPinBar and not finalShort, "Pin↓",    shape.circle,    location.abovebar, color.new(color.aqua,   50), size=size.tiny)
+
+// ===========================
+//  11. DASHBOARD
+// ===========================
+
+var table dash = table.new(position.top_right, 3, 22, color.new(color.black, 75), color.gray, 1, color.gray, 1)
+
+checkMark(bool c) => c ? "✓" : "✗"
+checkClr(bool c)  => c ? color.lime : color.new(color.red, 30)
+
+if barstate.islast
+    inLong  = strategy.position_size > 0
+    inShort = strategy.position_size < 0
+    inPos   = inLong or inShort
+    ap      = strategy.position_avg_price
+    pnlPct  = inLong ? (close - ap) / ap * 100 : inShort ? (ap - close) / ap * 100 : 0.0
+    dirText = inLong ? "LONG" : inShort ? "SHORT" : consLossBlocked ? "PAUSED" : "FLAT"
+    dirClr  = inLong ? color.lime : inShort ? color.red : consLossBlocked ? color.orange : color.gray
+
+    // Row 0: Header
+    table.cell(dash, 0, 0, "FUTURES SCALPER v1", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 0, "10x",                text_color=color.white,  text_size=size.small)
+    table.cell(dash, 2, 0, dirText,              text_color=dirClr,       text_size=size.small)
+
+    // Row 1: P&L
+    table.cell(dash, 0, 1, "P&L",               text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 1, str.tostring(pnlPct, "#.##") + "%",
+         text_color=pnlPct >= 0 ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 2, 1, "SL " + str.tostring(slPct) + "% / TP " + str.tostring(tp1Pct) + "/" + str.tostring(tp2Pct) + "%",
+         text_color=color.gray, text_size=size.tiny)
+
+    // Row 2: Consecutive Losses
+    table.cell(dash, 0, 2, "Con. Losses",        text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 2, str.tostring(consLosses) + "/" + str.tostring(consLossMax),
+         text_color=consLosses >= consLossMax ? color.orange : color.lime, text_size=size.small)
+    table.cell(dash, 2, 2, consLossBlocked ? "PAUSED" : "OK",
+         text_color=consLossBlocked ? color.orange : color.lime, text_size=size.tiny)
+
+    // Row 3: Long header
+    table.cell(dash, 0, 3, "── LONG SCORE ──",  text_color=color.lime,  text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 3, str.tostring(longScore) + "/10",
+         text_color=longScore >= minBuyScore ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 2, 3, longScore >= minBuyScore ? "READY" : "WAIT",
+         text_color=longScore >= minBuyScore ? color.lime : color.orange, text_size=size.tiny)
+
+    // Row 4: Trend
+    table.cell(dash, 0, 4,  "Trend (>EMA)",     text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 4,  checkMark(c_trend_L == 1), text_color=checkClr(c_trend_L == 1), text_size=size.small)
+    table.cell(dash, 2, 4,  emaTrendRising ? "RISING" : "FLAT/DOWN", text_color=checkClr(emaTrendRising), text_size=size.tiny)
+
+    // Row 5: VWAP
+    table.cell(dash, 0, 5,  "VWAP Bias",        text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 5,  checkMark(c_vwap_L == 1), text_color=checkClr(c_vwap_L == 1), text_size=size.small)
+    table.cell(dash, 2, 5,  close > vwapVal ? "ABOVE" : "BELOW", text_color=checkClr(close > vwapVal), text_size=size.tiny)
+
+    // Row 6: Volume
+    table.cell(dash, 0, 6,  "Volume Spike",     text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 6,  checkMark(c_volume_L == 1), text_color=checkClr(c_volume_L == 1), text_size=size.small)
+    table.cell(dash, 2, 6,  c_volume_L == 1 ? "SPIKE" : "NORMAL", text_color=checkClr(c_volume_L == 1), text_size=size.tiny)
+
+    // Row 7: RSI
+    table.cell(dash, 0, 7,  "RSI",              text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 7,  str.tostring(rsi, "#.#"), text_color=checkClr(c_rsi_L == 1), text_size=size.small)
+    table.cell(dash, 2, 7,  rsiBearDiv ? "BEAR DIV!" : rsi >= rsiOB ? "OB" : rsi <= rsiOS ? "OS" : "OK",
+         text_color=rsiBearDiv ? color.orange : checkClr(c_rsi_L == 1), text_size=size.tiny)
+
+    // Row 8: MACD
+    table.cell(dash, 0, 8,  "MACD",             text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 8,  checkMark(c_macd_L == 1), text_color=checkClr(c_macd_L == 1), text_size=size.small)
+    table.cell(dash, 2, 8,  c_macd_L == 1 ? "BULL↑" : "FLAT", text_color=checkClr(c_macd_L == 1), text_size=size.tiny)
+
+    // Row 9: Candle
+    table.cell(dash, 0, 9,  "Candle",           text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 9,  checkMark(c_candle_L == 1), text_color=checkClr(c_candle_L == 1), text_size=size.small)
+    pNameL = bullEngulf ? "ENGULF" : bullPinBar ? "PIN" : strongBull ? "STRONG" : bullCandle ? "BULL" : "—"
+    table.cell(dash, 2, 9,  pNameL, text_color=checkClr(c_candle_L == 1), text_size=size.tiny)
+
+    // Row 10: S/R
+    table.cell(dash, 0, 10, "Near Support",     text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 10, checkMark(c_support_L == 1), text_color=checkClr(c_support_L == 1), text_size=size.small)
+    table.cell(dash, 2, 10, nearResistance ? "AT RESIST!" : c_support_L == 1 ? "YES" : "NO",
+         text_color=nearResistance ? color.orange : checkClr(c_support_L == 1), text_size=size.tiny)
+
+    // Row 11: DI
+    table.cell(dash, 0, 11, "DI+ > DI-",        text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 11, checkMark(c_di_L == 1), text_color=checkClr(c_di_L == 1), text_size=size.small)
+    table.cell(dash, 2, 11, c_di_L == 1 ? "BUYERS" : "SELLERS", text_color=checkClr(c_di_L == 1), text_size=size.tiny)
+
+    // Row 12: ADX
+    table.cell(dash, 0, 12, "ADX",              text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 12, str.tostring(adx, "#.#"), text_color=checkClr(c_adx_L == 1), text_size=size.small)
+    table.cell(dash, 2, 12, c_adx_L == 1 ? "TREND" : "CHOP", text_color=checkClr(c_adx_L == 1), text_size=size.tiny)
+
+    // Row 13: Breakout
+    table.cell(dash, 0, 13, "Breakout",         text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 13, checkMark(c_breakout_L == 1), text_color=checkClr(c_breakout_L == 1), text_size=size.small)
+    table.cell(dash, 2, 13, c_breakout_L == 1 ? "YES" : "NO", text_color=checkClr(c_breakout_L == 1), text_size=size.tiny)
+
+    // Row 14: Short header
+    table.cell(dash, 0, 14, "── SHORT SCORE ──", text_color=color.red,   text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 14, str.tostring(shortScore) + "/10",
+         text_color=shortScore >= minSellScore ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 2, 14, shortScore >= minSellScore ? "READY" : "WAIT",
+         text_color=shortScore >= minSellScore ? color.red : color.orange, text_size=size.tiny)
+
+    // Row 15: Short Trend
+    table.cell(dash, 0, 15, "Trend (<EMA)",     text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 15, checkMark(c_trend_S == 1), text_color=checkClr(c_trend_S == 1), text_size=size.small)
+    table.cell(dash, 2, 15, emaTrendFalling ? "FALLING" : "FLAT/UP", text_color=checkClr(emaTrendFalling), text_size=size.tiny)
+
+    // Row 16: Short MACD
+    table.cell(dash, 0, 16, "MACD Bear",        text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 16, checkMark(c_macd_S == 1), text_color=checkClr(c_macd_S == 1), text_size=size.small)
+    table.cell(dash, 2, 16, c_macd_S == 1 ? "BEAR↓" : "FLAT", text_color=checkClr(c_macd_S == 1), text_size=size.tiny)
+
+    // Row 17: Short Candle
+    table.cell(dash, 0, 17, "Bear Candle",      text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 17, checkMark(c_candle_S == 1), text_color=checkClr(c_candle_S == 1), text_size=size.small)
+    pNameS = bearEngulf ? "ENGULF" : bearPinBar ? "PIN" : strongBear ? "STRONG" : bearCandle ? "BEAR" : "—"
+    table.cell(dash, 2, 17, pNameS, text_color=checkClr(c_candle_S == 1), text_size=size.tiny)
+
+    // Row 18: Near Resistance (for shorts)
+    table.cell(dash, 0, 18, "Near Resistance",  text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 18, checkMark(c_resist_S == 1), text_color=checkClr(c_resist_S == 1), text_size=size.small)
+    table.cell(dash, 2, 18, nearSupport ? "AT SUPP!" : c_resist_S == 1 ? "YES" : "NO",
+         text_color=nearSupport ? color.orange : checkClr(c_resist_S == 1), text_size=size.tiny)
+
+    // Row 19: Filters header
+    table.cell(dash, 0, 19, "── FILTERS ──",    text_color=color.gray,  text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 19, "", text_size=size.tiny)
+    table.cell(dash, 2, 19, "", text_size=size.tiny)
+
+    // Row 20: EMA Slope
+    table.cell(dash, 0, 20, "EMA Slope",        text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 20, emaTrendRising ? "↑" : emaTrendFalling ? "↓" : "—",
+         text_color=emaTrendRising ? color.lime : emaTrendFalling ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 2, 20, emaTrendRising ? "RISING" : emaTrendFalling ? "FALLING" : "FLAT",
+         text_color=emaTrendRising ? color.lime : emaTrendFalling ? color.red : color.gray, text_size=size.tiny)
+
+    // Row 21: RSI Divergence
+    table.cell(dash, 0, 21, "RSI Divergence",   text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 21, rsiBearDiv ? "BEAR" : rsiBullDiv ? "BULL" : "—",
+         text_color=rsiBearDiv ? color.orange : rsiBullDiv ? color.orange : color.lime, text_size=size.small)
+    table.cell(dash, 2, 21, rsiBearDiv ? "BLOCKS LONG" : rsiBullDiv ? "BLOCKS SHORT" : "CLEAN",
+         text_color=rsiBearDiv or rsiBullDiv ? color.orange : color.lime, text_size=size.tiny)
+
+// ===========================
+//  12. ALERTS
+// ===========================
+
+alertcondition(longCross or longPattern,           "Futures Long",       "FUTURES LONG — confluence entry")
+alertcondition(shortCross or shortPattern,         "Futures Short",      "FUTURES SHORT — confluence entry")
+alertcondition(longSellSig or longStrongSel,       "Close Long",         "CLOSE LONG — bearish exit")
+alertcondition(shortCoverSig or shortStrongCov,    "Close Short",        "CLOSE SHORT — bullish exit")
+alertcondition(consLossBlocked,                    "Loss Pause Active",  "ALGO PAUSED — consecutive loss limit hit")
