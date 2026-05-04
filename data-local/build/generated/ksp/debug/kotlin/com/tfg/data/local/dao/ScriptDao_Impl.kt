@@ -35,7 +35,7 @@ public class ScriptDao_Impl(
     this.__db = __db
     this.__insertAdapterOfScriptEntity = object : EntityInsertAdapter<ScriptEntity>() {
       protected override fun createQuery(): String =
-          "INSERT OR REPLACE INTO `scripts` (`id`,`name`,`code`,`isActive`,`activeSymbol`,`strategyTemplateId`,`paramsJson`,`lastRun`,`backtestResultJson`,`createdAt`,`updatedAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+          "INSERT OR REPLACE INTO `scripts` (`id`,`name`,`code`,`isActive`,`activeSymbol`,`strategyTemplateId`,`paramsJson`,`relatedSymbolsJson`,`lastRun`,`backtestResultJson`,`createdAt`,`updatedAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
 
       protected override fun bind(statement: SQLiteStatement, entity: ScriptEntity) {
         statement.bindText(1, entity.id)
@@ -61,25 +61,31 @@ public class ScriptDao_Impl(
         } else {
           statement.bindText(7, _tmpParamsJson)
         }
-        val _tmpLastRun: Long? = entity.lastRun
-        if (_tmpLastRun == null) {
+        val _tmpRelatedSymbolsJson: String? = entity.relatedSymbolsJson
+        if (_tmpRelatedSymbolsJson == null) {
           statement.bindNull(8)
         } else {
-          statement.bindLong(8, _tmpLastRun)
+          statement.bindText(8, _tmpRelatedSymbolsJson)
+        }
+        val _tmpLastRun: Long? = entity.lastRun
+        if (_tmpLastRun == null) {
+          statement.bindNull(9)
+        } else {
+          statement.bindLong(9, _tmpLastRun)
         }
         val _tmpBacktestResultJson: String? = entity.backtestResultJson
         if (_tmpBacktestResultJson == null) {
-          statement.bindNull(9)
+          statement.bindNull(10)
         } else {
-          statement.bindText(9, _tmpBacktestResultJson)
+          statement.bindText(10, _tmpBacktestResultJson)
         }
-        statement.bindLong(10, entity.createdAt)
-        statement.bindLong(11, entity.updatedAt)
+        statement.bindLong(11, entity.createdAt)
+        statement.bindLong(12, entity.updatedAt)
       }
     }
     this.__updateAdapterOfScriptEntity = object : EntityDeleteOrUpdateAdapter<ScriptEntity>() {
       protected override fun createQuery(): String =
-          "UPDATE OR ABORT `scripts` SET `id` = ?,`name` = ?,`code` = ?,`isActive` = ?,`activeSymbol` = ?,`strategyTemplateId` = ?,`paramsJson` = ?,`lastRun` = ?,`backtestResultJson` = ?,`createdAt` = ?,`updatedAt` = ? WHERE `id` = ?"
+          "UPDATE OR ABORT `scripts` SET `id` = ?,`name` = ?,`code` = ?,`isActive` = ?,`activeSymbol` = ?,`strategyTemplateId` = ?,`paramsJson` = ?,`relatedSymbolsJson` = ?,`lastRun` = ?,`backtestResultJson` = ?,`createdAt` = ?,`updatedAt` = ? WHERE `id` = ?"
 
       protected override fun bind(statement: SQLiteStatement, entity: ScriptEntity) {
         statement.bindText(1, entity.id)
@@ -105,21 +111,27 @@ public class ScriptDao_Impl(
         } else {
           statement.bindText(7, _tmpParamsJson)
         }
-        val _tmpLastRun: Long? = entity.lastRun
-        if (_tmpLastRun == null) {
+        val _tmpRelatedSymbolsJson: String? = entity.relatedSymbolsJson
+        if (_tmpRelatedSymbolsJson == null) {
           statement.bindNull(8)
         } else {
-          statement.bindLong(8, _tmpLastRun)
+          statement.bindText(8, _tmpRelatedSymbolsJson)
+        }
+        val _tmpLastRun: Long? = entity.lastRun
+        if (_tmpLastRun == null) {
+          statement.bindNull(9)
+        } else {
+          statement.bindLong(9, _tmpLastRun)
         }
         val _tmpBacktestResultJson: String? = entity.backtestResultJson
         if (_tmpBacktestResultJson == null) {
-          statement.bindNull(9)
+          statement.bindNull(10)
         } else {
-          statement.bindText(9, _tmpBacktestResultJson)
+          statement.bindText(10, _tmpBacktestResultJson)
         }
-        statement.bindLong(10, entity.createdAt)
-        statement.bindLong(11, entity.updatedAt)
-        statement.bindText(12, entity.id)
+        statement.bindLong(11, entity.createdAt)
+        statement.bindLong(12, entity.updatedAt)
+        statement.bindText(13, entity.id)
       }
     }
   }
@@ -147,6 +159,8 @@ public class ScriptDao_Impl(
         val _columnIndexOfStrategyTemplateId: Int = getColumnIndexOrThrow(_stmt,
             "strategyTemplateId")
         val _columnIndexOfParamsJson: Int = getColumnIndexOrThrow(_stmt, "paramsJson")
+        val _columnIndexOfRelatedSymbolsJson: Int = getColumnIndexOrThrow(_stmt,
+            "relatedSymbolsJson")
         val _columnIndexOfLastRun: Int = getColumnIndexOrThrow(_stmt, "lastRun")
         val _columnIndexOfBacktestResultJson: Int = getColumnIndexOrThrow(_stmt,
             "backtestResultJson")
@@ -183,6 +197,12 @@ public class ScriptDao_Impl(
           } else {
             _tmpParamsJson = _stmt.getText(_columnIndexOfParamsJson)
           }
+          val _tmpRelatedSymbolsJson: String?
+          if (_stmt.isNull(_columnIndexOfRelatedSymbolsJson)) {
+            _tmpRelatedSymbolsJson = null
+          } else {
+            _tmpRelatedSymbolsJson = _stmt.getText(_columnIndexOfRelatedSymbolsJson)
+          }
           val _tmpLastRun: Long?
           if (_stmt.isNull(_columnIndexOfLastRun)) {
             _tmpLastRun = null
@@ -200,7 +220,7 @@ public class ScriptDao_Impl(
           val _tmpUpdatedAt: Long
           _tmpUpdatedAt = _stmt.getLong(_columnIndexOfUpdatedAt)
           _item =
-              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
+              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpRelatedSymbolsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
           _result.add(_item)
         }
         _result
@@ -225,6 +245,8 @@ public class ScriptDao_Impl(
         val _columnIndexOfStrategyTemplateId: Int = getColumnIndexOrThrow(_stmt,
             "strategyTemplateId")
         val _columnIndexOfParamsJson: Int = getColumnIndexOrThrow(_stmt, "paramsJson")
+        val _columnIndexOfRelatedSymbolsJson: Int = getColumnIndexOrThrow(_stmt,
+            "relatedSymbolsJson")
         val _columnIndexOfLastRun: Int = getColumnIndexOrThrow(_stmt, "lastRun")
         val _columnIndexOfBacktestResultJson: Int = getColumnIndexOrThrow(_stmt,
             "backtestResultJson")
@@ -260,6 +282,12 @@ public class ScriptDao_Impl(
           } else {
             _tmpParamsJson = _stmt.getText(_columnIndexOfParamsJson)
           }
+          val _tmpRelatedSymbolsJson: String?
+          if (_stmt.isNull(_columnIndexOfRelatedSymbolsJson)) {
+            _tmpRelatedSymbolsJson = null
+          } else {
+            _tmpRelatedSymbolsJson = _stmt.getText(_columnIndexOfRelatedSymbolsJson)
+          }
           val _tmpLastRun: Long?
           if (_stmt.isNull(_columnIndexOfLastRun)) {
             _tmpLastRun = null
@@ -277,7 +305,7 @@ public class ScriptDao_Impl(
           val _tmpUpdatedAt: Long
           _tmpUpdatedAt = _stmt.getLong(_columnIndexOfUpdatedAt)
           _result =
-              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
+              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpRelatedSymbolsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
         } else {
           _result = null
         }
@@ -301,6 +329,8 @@ public class ScriptDao_Impl(
         val _columnIndexOfStrategyTemplateId: Int = getColumnIndexOrThrow(_stmt,
             "strategyTemplateId")
         val _columnIndexOfParamsJson: Int = getColumnIndexOrThrow(_stmt, "paramsJson")
+        val _columnIndexOfRelatedSymbolsJson: Int = getColumnIndexOrThrow(_stmt,
+            "relatedSymbolsJson")
         val _columnIndexOfLastRun: Int = getColumnIndexOrThrow(_stmt, "lastRun")
         val _columnIndexOfBacktestResultJson: Int = getColumnIndexOrThrow(_stmt,
             "backtestResultJson")
@@ -337,6 +367,12 @@ public class ScriptDao_Impl(
           } else {
             _tmpParamsJson = _stmt.getText(_columnIndexOfParamsJson)
           }
+          val _tmpRelatedSymbolsJson: String?
+          if (_stmt.isNull(_columnIndexOfRelatedSymbolsJson)) {
+            _tmpRelatedSymbolsJson = null
+          } else {
+            _tmpRelatedSymbolsJson = _stmt.getText(_columnIndexOfRelatedSymbolsJson)
+          }
           val _tmpLastRun: Long?
           if (_stmt.isNull(_columnIndexOfLastRun)) {
             _tmpLastRun = null
@@ -354,7 +390,7 @@ public class ScriptDao_Impl(
           val _tmpUpdatedAt: Long
           _tmpUpdatedAt = _stmt.getLong(_columnIndexOfUpdatedAt)
           _item =
-              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
+              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpRelatedSymbolsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
           _result.add(_item)
         }
         _result
@@ -377,6 +413,8 @@ public class ScriptDao_Impl(
         val _columnIndexOfStrategyTemplateId: Int = getColumnIndexOrThrow(_stmt,
             "strategyTemplateId")
         val _columnIndexOfParamsJson: Int = getColumnIndexOrThrow(_stmt, "paramsJson")
+        val _columnIndexOfRelatedSymbolsJson: Int = getColumnIndexOrThrow(_stmt,
+            "relatedSymbolsJson")
         val _columnIndexOfLastRun: Int = getColumnIndexOrThrow(_stmt, "lastRun")
         val _columnIndexOfBacktestResultJson: Int = getColumnIndexOrThrow(_stmt,
             "backtestResultJson")
@@ -412,6 +450,12 @@ public class ScriptDao_Impl(
           } else {
             _tmpParamsJson = _stmt.getText(_columnIndexOfParamsJson)
           }
+          val _tmpRelatedSymbolsJson: String?
+          if (_stmt.isNull(_columnIndexOfRelatedSymbolsJson)) {
+            _tmpRelatedSymbolsJson = null
+          } else {
+            _tmpRelatedSymbolsJson = _stmt.getText(_columnIndexOfRelatedSymbolsJson)
+          }
           val _tmpLastRun: Long?
           if (_stmt.isNull(_columnIndexOfLastRun)) {
             _tmpLastRun = null
@@ -429,7 +473,7 @@ public class ScriptDao_Impl(
           val _tmpUpdatedAt: Long
           _tmpUpdatedAt = _stmt.getLong(_columnIndexOfUpdatedAt)
           _result =
-              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
+              ScriptEntity(_tmpId,_tmpName,_tmpCode,_tmpIsActive,_tmpActiveSymbol,_tmpStrategyTemplateId,_tmpParamsJson,_tmpRelatedSymbolsJson,_tmpLastRun,_tmpBacktestResultJson,_tmpCreatedAt,_tmpUpdatedAt)
         } else {
           _result = null
         }

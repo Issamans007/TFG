@@ -1013,7 +1013,7 @@ function addTextLabel(time, price, text) {
   notifyDrawingAdded('text', { time, price, text });
 }
 
-function clearDrawings() {
+function clearDrawings(noSync) {
   console.log('[chart] clearDrawings');
   drawings.forEach(function(d) { removeDrawingObj(d); });
   drawings = [];
@@ -1021,6 +1021,7 @@ function clearDrawings() {
   // Restore only signal markers (remove text/vline/measure labels)
   markers = markers.filter(m => m.text === 'BUY' || m.text === 'SELL' || m.text === 'CLOSE');
   candleSeries.setMarkers(markers);
+  if (!noSync) _syncDrawingsToDb();
 }
 
 // ─── Per-symbol drawing persistence ────────────────────────────────
@@ -1097,9 +1098,8 @@ function setSymbol(symbol) {
   console.log('[chart] setSymbol:', symbol, 'prev:', _currentSymbol);
   if (!symbol) return;
   if (_currentSymbol === symbol) return;
-  if (_currentSymbol) _saveDrawingsForSymbol(_currentSymbol);
-  // Clear runtime drawing state (without touching signal markers persistence rules)
-  clearDrawings();
+  // Room DB is authoritative — just clear drawings; Kotlin will call setDrawings() after
+  clearDrawings(true);
   // Cancel any in-progress drawing
   drawingMode = null;
   drawStart = null;
@@ -1108,7 +1108,6 @@ function setSymbol(symbol) {
   moveMode = false;
   document.querySelectorAll('.toolbar button').forEach(function(b) { b.classList.remove('active'); });
   _currentSymbol = symbol;
-  _loadDrawingsForSymbol(symbol);
 }
 
 function undoDrawing() {
@@ -1119,6 +1118,7 @@ function undoDrawing() {
   if (last.type === 'text' || last.type === 'vline' || last.type === 'measure') {
     rebuildMarkers();
   }
+  _syncDrawingsToDb();
 }
 
 function removeDrawingObj(d) {
@@ -1142,6 +1142,38 @@ function removeDrawingObj(d) {
 
 function notifyDrawingAdded(type, data) {
   try { Android.onDrawingAdded(type, JSON.stringify(data)); } catch(e) {}
+  _syncDrawingsToDb();
+}
+
+var _isSettingDrawings = false;
+
+/** Inject drawings from Room DB (called from Kotlin after symbol switch). */
+function setDrawings(json) {
+  try {
+    if (!json || json === 'null') return;
+    var arr = JSON.parse(json);
+    if (!Array.isArray(arr) || arr.length === 0) return;
+    _isSettingDrawings = true;
+    // Clear without syncing back (we're loading from DB)
+    drawings.forEach(function(d) { removeDrawingObj(d); });
+    drawings = [];
+    selectedDrawingIdx = -1;
+    _isSettingDrawings = false;
+    _deserializeDrawings(arr);
+  } catch (e) {
+    _isSettingDrawings = false;
+    console.warn('[chart] setDrawings failed', e);
+  }
+}
+
+/** Sync current drawings state to Room DB via Android bridge. */
+function _syncDrawingsToDb() {
+  if (_isSettingDrawings) return;
+  try {
+    if (typeof Android !== 'undefined') {
+      Android.onDrawingsSynced(JSON.stringify(_serializeDrawings()));
+    }
+  } catch (e) {}
 }
 
 // ─── Drawing Selection, Move & Delete ───────────────────────────────

@@ -1,24 +1,30 @@
-package com.example.tfg
+package com.tfg
 
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
-
 import org.junit.Test
 import org.junit.runner.RunWith
-
 import org.junit.Assert.*
 
 /**
- * Instrumented test, which will execute on an Android device.
- *
- * See [testing documentation](http://d.android.com/tools/testing).
+ * Instrumented tests that verify app-level correctness on a real device / emulator.
  */
 @RunWith(AndroidJUnit4::class)
-class ExampleInstrumentedTest {
+class TradingAppInstrumentedTest {
+
     @Test
-    fun useAppContext() {
-        // Context of the app under test.
-        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("com.example.tfg", appContext.packageName)
+    fun appPackageName_isCorrect() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        assertEquals(
+            "Application ID must be com.tfg.tradeforgood — was the manifest namespace changed?",
+            "com.tfg.tradeforgood",
+            ctx.packageName
+        )
+    }
+
+    @Test
+    fun targetContext_isNotNull() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        assertNotNull("Target context must not be null", ctx)
     }
 }

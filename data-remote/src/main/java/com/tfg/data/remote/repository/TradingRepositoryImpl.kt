@@ -76,9 +76,16 @@ class TradingRepositoryImpl @Inject constructor(
     }
 
     override suspend fun placeOrder(order: Order): Result<Order> {
-        if (order.marketType == MarketType.FUTURES_USDM) return placeFuturesOrderInternal(order)
-        return placeSpotOrder(order)
+        // Ensure every order has a non-blank client ID before hitting the exchange
+        // or being stored in Room. Binance rejects blank newClientOrderId and
+        // Room would overwrite any prior row with the same PK.
+        val effective = if (order.id.isBlank()) order.copy(id = generateOrderId()) else order
+        if (effective.marketType == MarketType.FUTURES_USDM) return placeFuturesOrderInternal(effective)
+        return placeSpotOrder(effective)
     }
+
+    private fun generateOrderId(): String =
+        "tfg" + java.util.UUID.randomUUID().toString().replace("-", "").take(29)
 
     private suspend fun placeSpotOrder(order: Order): Result<Order> = runCatching {
         // Round qty/price to LOT_SIZE / tickSize before signing — Binance

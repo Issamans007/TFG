@@ -8,6 +8,8 @@ import com.tfg.data.remote.api.BinanceApi
 import com.tfg.data.remote.websocket.WebSocketManager
 import com.tfg.domain.model.*
 import com.tfg.domain.repository.TradingRepository
+import com.tfg.domain.service.ConsoleBus
+import com.tfg.domain.service.ConsoleSource
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -26,6 +28,7 @@ class TradeExecutor @Inject constructor(
     private val riskEngine: RiskEngine,
     private val binanceApi: BinanceApi,
     private val webSocketManager: WebSocketManager,
+    private val consoleBus: ConsoleBus,
     @ApplicationContext private val context: Context
 ) {
     private val prefs = context.getSharedPreferences("trade_executor", Context.MODE_PRIVATE)
@@ -190,12 +193,34 @@ class TradeExecutor @Inject constructor(
      * and the client-side monitoring loop is still active as a fallback.
      */
     private suspend fun placeExchangeSideProtection(original: Order, filled: Order) {
-        // Need exactly one TP and one SL to express as a single OCO/bracket.
-        // Multi-level TPs stay on client-side monitoring (Binance OCO is single-leg).
-        val singleTp = original.takeProfits.singleOrNull() ?: return
-        val singleSl = original.stopLosses.singleOrNull() ?: return
+        // Use the nearest TP to entry as the exchange-side bracket target so the
+        // position has at least partial protection even when multiple TP levels
+        // are configured. Remaining levels beyond the nearest one continue to be
+        // handled by the client-side monitoring loop (checkTakeProfits).
+        // For a BUY: TPs are above entry → nearest = lowest price TP.
+        // For a SELL: TPs are below entry → nearest = highest price TP.
+        val nearestTp = if (original.side == OrderSide.BUY)
+            original.takeProfits.minByOrNull { it.price }
+        else
+            original.takeProfits.maxByOrNull { it.price }
+        val nearestTp2 = nearestTp ?: return   // No TPs at all — nothing to bracket
+        val singleSl = original.stopLosses.firstOrNull() ?: return
         val qty = filled.filledQuantity.takeIf { it > 0 } ?: return
         val closeSide = if (original.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
+
+        // Warn when multi-level TPs are present: levels beyond the nearest are
+        // client-side only, meaning a device loss of power would miss them.
+        if (original.takeProfits.size > 1) {
+            consoleBus.warn(
+                ConsoleSource.TRADING,
+                "Multi-TP: TP1 on exchange, TP2+ client-only",
+                "${original.symbol} has ${original.takeProfits.size} TP levels. " +
+                "Only the nearest (${String.format("%.4f", nearestTp2.price)}) is placed on the exchange. " +
+                "Remaining levels are protected by this app only — keep the app running.",
+                symbol = original.symbol
+            )
+        }
+        @Suppress("NAME_SHADOWING") val singleTp = nearestTp2
 
         try {
             when (original.marketType) {
@@ -325,25 +350,35 @@ class TradeExecutor @Inject constructor(
                 try {
                     val closeQty = order.quantity * (tp.quantityPercent / 100.0)
                     val closeSide = if (order.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
-                    tradingRepository.placeOrder(
+                    val result = tradingRepository.placeOrder(
                         order.copy(
                             id = "", side = closeSide, quantity = closeQty,
                             type = OrderType.MARKET, takeProfits = emptyList(), stopLosses = emptyList(),
                             reduceOnly = order.marketType == MarketType.FUTURES_USDM
                         )
                     )
-                    TradeHaptics.takeProfitHit(context)
-                    TradeSounds.takeProfitHit(context)
-                    executedTpLevels.add(tpKey)
-                    persistTpLevels()
+                    val placed = result.getOrNull()
+                    if (placed == null) {
+                        Timber.e(result.exceptionOrNull(), "TP close order rejected by exchange for ${order.symbol}")
+                    } else {
+                        val confirmed = confirmFill(placed)
+                        if (confirmed.status == OrderStatus.FILLED) {
+                            TradeHaptics.takeProfitHit(context)
+                            TradeSounds.takeProfitHit(context)
+                            executedTpLevels.add(tpKey)
+                            persistTpLevels()
 
-                    // B5: Breakeven-after-TP — move SL to entry after N TPs hit
-                    val config = riskEngine.getRiskConfigSnapshot()
-                    val firedTpCount = order.takeProfits.count { "${order.id}:${it.id}" in executedTpLevels }
-                    if (firedTpCount >= config.breakEvenAfterTpCount && order.id !in breakevenActive) {
-                        breakevenActive.add(order.id)
-                        persistBreakeven()
-                        Timber.i("Breakeven activated for ${order.symbol} (${order.id}) after $firedTpCount TPs")
+                            // B5: Breakeven-after-TP — move SL to entry after N TPs hit
+                            val config = riskEngine.getRiskConfigSnapshot()
+                            val firedTpCount = order.takeProfits.count { "${order.id}:${it.id}" in executedTpLevels }
+                            if (firedTpCount >= config.breakEvenAfterTpCount && order.id !in breakevenActive) {
+                                breakevenActive.add(order.id)
+                                persistBreakeven()
+                                Timber.i("Breakeven activated for ${order.symbol} (${order.id}) after $firedTpCount TPs")
+                            }
+                        } else {
+                            Timber.w("TP close placed but fill not yet confirmed (${confirmed.status}) for ${order.symbol} — will retry on next tick")
+                        }
                     }
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to execute TP for ${order.symbol}")
@@ -399,7 +434,7 @@ class TradeExecutor @Inject constructor(
                 try {
                     val closeQty = order.quantity * (sl.quantityPercent / 100.0)
                     val closeSide = if (order.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
-                    tradingRepository.placeOrder(
+                    val result = tradingRepository.placeOrder(
                         order.copy(
                             id = "", side = closeSide, quantity = closeQty,
                             type = OrderType.MARKET,
@@ -407,11 +442,21 @@ class TradeExecutor @Inject constructor(
                             reduceOnly = order.marketType == MarketType.FUTURES_USDM
                         )
                     )
-                    TradeHaptics.stopLossHit(context)
-                    TradeSounds.stopLossHit(context)
-                    riskEngine.recordLoss(order)
-                    executedSlLevels.add(slKey)
-                    persistSlLevels()
+                    val placed = result.getOrNull()
+                    if (placed == null) {
+                        Timber.e(result.exceptionOrNull(), "SL close order rejected by exchange for ${order.symbol}")
+                    } else {
+                        val confirmed = confirmFill(placed)
+                        if (confirmed.status == OrderStatus.FILLED) {
+                            TradeHaptics.stopLossHit(context)
+                            TradeSounds.stopLossHit(context)
+                            riskEngine.recordLoss(order)
+                            executedSlLevels.add(slKey)
+                            persistSlLevels()
+                        } else {
+                            Timber.w("SL close placed but fill not yet confirmed (${confirmed.status}) for ${order.symbol} — will retry on next tick")
+                        }
+                    }
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to execute SL for ${order.symbol}")
                 }
@@ -469,16 +514,26 @@ class TradeExecutor @Inject constructor(
             TradeSounds.stopLossHit(context)
             try {
                 val closeSide = if (order.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
-                tradingRepository.placeOrder(
+                val result = tradingRepository.placeOrder(
                     order.copy(
                         id = "", side = closeSide, type = OrderType.MARKET,
                         takeProfits = emptyList(), stopLosses = emptyList(), trailingStopPercent = null,
                         reduceOnly = order.marketType == MarketType.FUTURES_USDM
                     )
                 )
-                orderDao.updateStatus(order.id, OrderStatus.FILLED.name)
-                peakPrices.remove(order.id)
-                persistPeakPrices()
+                val placed = result.getOrNull()
+                if (placed == null) {
+                    Timber.e(result.exceptionOrNull(), "Trailing-stop close order rejected by exchange for ${order.symbol}")
+                } else {
+                    val confirmed = confirmFill(placed)
+                    if (confirmed.status == OrderStatus.FILLED) {
+                        orderDao.updateStatus(order.id, OrderStatus.FILLED.name)
+                        peakPrices.remove(order.id)
+                        persistPeakPrices()
+                    } else {
+                        Timber.w("Trailing-stop close placed but fill not yet confirmed (${confirmed.status}) for ${order.symbol} — will retry on next tick")
+                    }
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to execute trailing stop for ${order.symbol}")
             }
@@ -492,13 +547,23 @@ class TradeExecutor @Inject constructor(
             try {
                 val order = com.tfg.data.local.mapper.EntityMapper.run { orderEntity.toDomain() }
                 val closeSide = if (order.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
-                tradingRepository.placeOrder(
+                val result = tradingRepository.placeOrder(
                     order.copy(
                         id = "", side = closeSide, type = OrderType.MARKET,
                         takeProfits = emptyList(), stopLosses = emptyList()
                     )
                 )
-                orderDao.updateStatus(order.id, OrderStatus.CANCELLED.name)
+                val placed = result.getOrNull()
+                if (placed == null) {
+                    Timber.e(result.exceptionOrNull(), "Close order rejected by exchange for ${orderEntity.symbol}")
+                } else {
+                    val confirmed = confirmFill(placed)
+                    if (confirmed.status == OrderStatus.FILLED) {
+                        orderDao.updateStatus(order.id, OrderStatus.CANCELLED.name)
+                    } else {
+                        Timber.w("Close position placed but fill not yet confirmed (${confirmed.status}) for ${orderEntity.symbol}")
+                    }
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Failed to close position: ${orderEntity.symbol}")
             }
@@ -514,10 +579,8 @@ class TradeExecutor @Inject constructor(
             }
             "CANCEL_ORDER" -> {
                 val orderJson = item.orderJson ?: return
-                val parts = orderJson.split(",")
-                if (parts.size >= 2) {
-                    tradingRepository.cancelOrder(parts[0], parts[1])
-                }
+                val cancelOrder = com.google.gson.Gson().fromJson(orderJson, Order::class.java)
+                tradingRepository.cancelOrder(cancelOrder.id, cancelOrder.symbol)
             }
         }
     }

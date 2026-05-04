@@ -34,16 +34,16 @@ class WebSocketManager @Inject constructor(
     private var reconnectScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // Store last connection params for reconnectAll()
-    private var lastTickerSymbols: List<String>? = null
-    private var lastListenKey: String? = null
+    @Volatile private var lastTickerSymbols: List<String>? = null
+    @Volatile private var lastListenKey: String? = null
 
     // Kline backfill state — a WS reconnect may take several seconds during
     // which final-close kline events are lost. We remember the last finalised
     // bar's closeTime (per symbol+interval) and on reconnect ask Binance REST
     // for any bars that closed in the gap, then re-emit them so downstream
     // signal/strategy code sees a continuous bar stream.
-    private var lastKlineSymbol: String? = null
-    private var lastKlineInterval: String? = null
+    @Volatile private var lastKlineSymbol: String? = null
+    @Volatile private var lastKlineInterval: String? = null
     @Volatile private var lastKlineCloseTimeMs: Long = 0L
 
     // Stale-heartbeat watchdog: Binance pings every ~3min. If we see no

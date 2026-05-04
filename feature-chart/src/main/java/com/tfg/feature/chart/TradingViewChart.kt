@@ -37,7 +37,9 @@ fun TradingViewChart(
     chartType: String = "candle",
     symbol: String = "",
     modifier: Modifier = Modifier,
-    onDrawing: (String, String) -> Unit = { _, _ -> }
+    onDrawing: (String, String) -> Unit = { _, _ -> },
+    savedDrawingsJson: String? = null,
+    onDrawingsSync: (String) -> Unit = { _ -> }
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var isReady by remember { mutableStateOf(false) }
@@ -49,6 +51,17 @@ fun TradingViewChart(
         webView?.post {
             val safe = symbol.replace("'", "")
             webView?.evaluateJavascript("setSymbol('$safe')", null)
+        }
+    }
+
+    // Inject saved drawings from Room DB after symbol is set
+    LaunchedEffect(isReady, symbol, savedDrawingsJson) {
+        if (!isReady || symbol.isEmpty() || savedDrawingsJson == null) return@LaunchedEffect
+        webView?.post {
+            val safe = savedDrawingsJson
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+            webView?.evaluateJavascript("setDrawings('$safe')", null)
         }
     }
 
@@ -247,6 +260,11 @@ fun TradingViewChart(
                     @JavascriptInterface
                     fun onDrawingAdded(type: String, data: String) {
                         onDrawing(type, data)
+                    }
+
+                    @JavascriptInterface
+                    fun onDrawingsSynced(json: String) {
+                        onDrawingsSync(json)
                     }
                 }, "Android")
 

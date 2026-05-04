@@ -95,7 +95,7 @@ class DashboardViewModel @Inject constructor(
                     getAnalyticsUseCase(thirtyDaysAgo, now, false).collect { analytics ->
                         _state.update { it.copy(analytics = analytics) }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) { timber.log.Timber.w(e, "Failed to load analytics for dashboard") }
             }
             
             // Get total donated
@@ -104,7 +104,8 @@ class DashboardViewModel @Inject constructor(
                     donationRepository.getTotalDonated().collect { total ->
                         _state.update { it.copy(totalDonated = total, isLoading = false) }
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    timber.log.Timber.w(e, "Failed to load donation total")
                     _state.update { it.copy(isLoading = false) }
                 }
             }
@@ -131,7 +132,7 @@ class DashboardViewModel @Inject constructor(
                 val signals = signalRepository.getRecentSignals(10).getOrElse { emptyList() }
                 _state.update { it.copy(recentSignals = signals) }
             } catch (e: Exception) {
-                // Silent failure for signals
+                timber.log.Timber.w(e, "Failed to load recent signals")
             }
         }
     }

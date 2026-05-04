@@ -10,7 +10,13 @@ data class ScriptAccount(
     val positionSide: String? = null,  // "LONG", "SHORT", or null
     val positionPnl: Double = 0.0,
     val positionSize: Double = 0.0,
-    val positionEntry: Double = 0.0
+    val positionEntry: Double = 0.0,
+    /** "WIN", "LOSS", "EVEN", or null if no trades closed yet */
+    val lastTradeResult: String? = null,
+    /** Number of open orders currently pending on-exchange */
+    val pendingOrderCount: Int = 0,
+    /** Number of consecutive losing trades (resets on a win) */
+    val consecutiveLosses: Int = 0
 )
 
 /**

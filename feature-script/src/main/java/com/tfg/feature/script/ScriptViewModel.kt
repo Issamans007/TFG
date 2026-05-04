@@ -13,6 +13,9 @@ import com.tfg.domain.model.SignalType
 import com.tfg.domain.model.StrategyTemplate
 import com.tfg.domain.model.StrategyTemplates
 import com.tfg.domain.model.extractParamsFromCode
+import com.tfg.domain.model.extractParamMeta
+import com.tfg.domain.model.validateParam
+import com.tfg.domain.model.ParamMeta
 import com.tfg.domain.model.injectParamIntoCode
 import com.tfg.domain.model.toCsv
 import com.tfg.domain.model.runMonteCarlo
@@ -67,6 +70,8 @@ data class ScriptUiState(
     val syntaxError: String? = null,
     val console: List<String> = emptyList(),
     val editableParams: Map<String, String> = emptyMap(),
+    val paramMeta: Map<String, ParamMeta> = emptyMap(),
+    val paramErrors: Map<String, String> = emptyMap(),
     val showSettings: Boolean = false,
     val currentTemplateName: String? = null,
     val candles: List<Candle> = emptyList(),
@@ -400,9 +405,16 @@ class ScriptViewModel @Inject constructor(
 
     fun updateCode(code: String) {
         val extracted = extractParamsFromCode(code)
+        val meta = extractParamMeta(code)
         _state.update {
             val merged = if (extracted.isNotEmpty()) extracted else it.editableParams
-            it.copy(code = code, editableParams = merged)
+            // Re-validate existing param values against new meta
+            val errors = merged.entries.mapNotNull { (k, v) ->
+                val m = meta[k] ?: return@mapNotNull null
+                val err = validateParam(k, v, m) ?: return@mapNotNull null
+                k to err
+            }.toMap()
+            it.copy(code = code, editableParams = merged, paramMeta = meta, paramErrors = errors)
         }
         scheduleValidation(code)
     }
@@ -515,7 +527,14 @@ class ScriptViewModel @Inject constructor(
         // source via regex (eating across newlines), which made the field
         // unable to recover once cleared. Code is synced on Apply / before run.
         _state.update {
-            it.copy(editableParams = it.editableParams + (key to value))
+            val meta = it.paramMeta[key]
+            val error = if (meta != null) validateParam(key, value, meta) else null
+            val newErrors = if (error != null) it.paramErrors + (key to error)
+                           else it.paramErrors - key
+            it.copy(
+                editableParams = it.editableParams + (key to value),
+                paramErrors = newErrors
+            )
         }
     }
 
@@ -619,6 +638,7 @@ class ScriptViewModel @Inject constructor(
                     code = _state.value.code,
                     strategyTemplateId = templateId,
                     params = _state.value.editableParams,
+                    relatedSymbols = _state.value.selectedScript?.relatedSymbols ?: emptyList(),
                     createdAt = _state.value.selectedScript?.createdAt ?: System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
                 )
@@ -634,6 +654,23 @@ class ScriptViewModel @Inject constructor(
                 _state.update { it.copy(isSaving = false) }
             }
         }
+    }
+
+    fun addRelatedSymbol(symbol: String) {
+        val trimmed = symbol.trim().uppercase()
+        if (trimmed.isBlank()) return
+        val current = _state.value.selectedScript ?: return
+        if (current.relatedSymbols.contains(trimmed)) return
+        val updated = current.copy(relatedSymbols = current.relatedSymbols + trimmed, updatedAt = System.currentTimeMillis())
+        _state.update { it.copy(selectedScript = updated) }
+        viewModelScope.launch { scriptRepository.save(updated) }
+    }
+
+    fun removeRelatedSymbol(symbol: String) {
+        val current = _state.value.selectedScript ?: return
+        val updated = current.copy(relatedSymbols = current.relatedSymbols - symbol, updatedAt = System.currentTimeMillis())
+        _state.update { it.copy(selectedScript = updated) }
+        viewModelScope.launch { scriptRepository.save(updated) }
     }
 
     fun selectScript(script: Script) {

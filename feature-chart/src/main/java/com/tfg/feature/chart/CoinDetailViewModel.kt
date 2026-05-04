@@ -7,10 +7,14 @@ import androidx.lifecycle.viewModelScope
 import com.tfg.domain.model.*
 import com.tfg.domain.model.extractParamsFromCode
 import com.tfg.domain.model.injectParamIntoCode
+import com.tfg.domain.repository.AlertRepository
 import com.tfg.domain.repository.MarketRepository
 import com.tfg.domain.repository.ScriptRepository
 import com.tfg.domain.repository.IndicatorRepository
+import com.tfg.data.local.dao.DrawingSnapshotDao
+import com.tfg.data.local.entity.DrawingSnapshotEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
@@ -387,7 +391,9 @@ data class CoinDetailUiState(
     val strategyPlotJson: String? = null,
     val dashboardOverlayJson: String? = null,
     // When true, loadSignalMarkers() skips DB updates to preserve backtest markers
-    val isBacktestActive: Boolean = false
+    val isBacktestActive: Boolean = false,
+    // Drawings loaded from Room DB to inject into chart after symbol load
+    val savedDrawingsJson: String? = null
 )
 
 @HiltViewModel
@@ -397,7 +403,9 @@ class CoinDetailViewModel @Inject constructor(
     private val scriptRepository: ScriptRepository,
     private val indicatorRepository: IndicatorRepository,
     private val indicatorExecutor: IndicatorExecutor,
-    private val scriptExecutor: ScriptExecutor
+    private val scriptExecutor: ScriptExecutor,
+    private val drawingSnapshotDao: DrawingSnapshotDao,
+    private val alertRepository: AlertRepository
 ) : ViewModel() {
 
     private val symbol: String = savedStateHandle["symbol"] ?: "BTCUSDT"
@@ -414,6 +422,53 @@ class CoinDetailViewModel @Inject constructor(
         startTickerRefresh()
         loadScriptTemplates()
         loadUserIndicators()
+        loadDrawings()
+    }
+
+    /** Load saved drawings from Room for the current symbol and inject into chart state. */
+    private fun loadDrawings() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val snapshot = drawingSnapshotDao.getForSymbol(symbol)
+            _state.update { it.copy(savedDrawingsJson = snapshot?.drawingsJson) }
+        }
+    }
+
+    /** Called from the JS bridge when drawings change (add/undo/clear). Saves to Room. */
+    fun onDrawingsSync(json: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            drawingSnapshotDao.upsert(DrawingSnapshotEntity(symbol = symbol, drawingsJson = json))
+        }
+    }
+
+    /**
+     * Called from JS bridge when a drawing is added.
+     * For alert-type drawings, also persists an [AlertEntity] so the trading
+     * engine can fire a price-alert notification when the price is reached.
+     */
+    fun onDrawingAdded(type: String, dataJson: String) {
+        if (type == "alert") {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val obj = org.json.JSONObject(dataJson)
+                    val price = obj.getDouble("price")
+                    val currentPrice = _state.value.ticker?.price ?: 0.0
+                    val condition = if (currentPrice < price) AlertCondition.CROSSES_ABOVE else AlertCondition.CROSSES_BELOW
+                    val alert = Alert(
+                        id = UUID.randomUUID().toString(),
+                        symbol = symbol,
+                        name = "Price Alert @ ${String.format("%.6f", price).trimEnd('0').trimEnd('.')}",
+                        type = AlertType.PRICE,
+                        condition = condition,
+                        targetValue = price,
+                        isEnabled = true,
+                        isRepeating = false,
+                        createdAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    alertRepository.saveAlert(alert)
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     fun changeInterval(interval: String) {

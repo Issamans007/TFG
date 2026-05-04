@@ -95,7 +95,7 @@ class MarketsViewModel @Inject constructor(
                     marketRepository.getMarketData().collect { marketData ->
                         _state.update { it.copy(fearGreedIndex = marketData.fearGreedIndex) }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) { Timber.w(e, "Failed to load market data") }
             }
 
             // Fallback: stop loading after 5s no matter what

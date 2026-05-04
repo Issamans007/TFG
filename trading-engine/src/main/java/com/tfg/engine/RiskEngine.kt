@@ -195,7 +195,9 @@ class RiskEngine @Inject constructor(
 
         // Time-based trading window check (supports overnight windows like 23:00-01:00)
         if (config.tradingWindowStart != null && config.tradingWindowEnd != null) {
-            val now = java.util.Calendar.getInstance()
+            // Use UTC so the window aligns with Binance's exchange clock regardless
+            // of the device's local timezone or DST setting.
+            val now = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
             val currentMinutes = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
 
             fun parseMinutes(hhmm: String): Int? {
@@ -234,9 +236,9 @@ class RiskEngine @Inject constructor(
             }
         }
 
-        // Weekend check
+        // Weekend check (UTC so it stays consistent with the exchange clock)
         if (!config.weekendTradingEnabled) {
-            val dayOfWeek = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK)
+            val dayOfWeek = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).get(java.util.Calendar.DAY_OF_WEEK)
             if (dayOfWeek == java.util.Calendar.SATURDAY || dayOfWeek == java.util.Calendar.SUNDAY) {
                 violations.add(RiskViolation(
                     "WEEKEND_TRADING",

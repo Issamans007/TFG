@@ -21,6 +21,8 @@ import com.tfg.`data`.local.dao.CustomTemplateDao
 import com.tfg.`data`.local.dao.CustomTemplateDao_Impl
 import com.tfg.`data`.local.dao.DonationDao
 import com.tfg.`data`.local.dao.DonationDao_Impl
+import com.tfg.`data`.local.dao.DrawingSnapshotDao
+import com.tfg.`data`.local.dao.DrawingSnapshotDao_Impl
 import com.tfg.`data`.local.dao.FeeRecordDao
 import com.tfg.`data`.local.dao.FeeRecordDao_Impl
 import com.tfg.`data`.local.dao.IndicatorDao
@@ -111,9 +113,13 @@ public class TfgDatabase_Impl : TfgDatabase() {
     IndicatorDao_Impl(this)
   }
 
+  private val _drawingSnapshotDao: Lazy<DrawingSnapshotDao> = lazy {
+    DrawingSnapshotDao_Impl(this)
+  }
+
   protected override fun createOpenDelegate(): RoomOpenDelegate {
-    val _openDelegate: RoomOpenDelegate = object : RoomOpenDelegate(11,
-        "51f59f9f55ba83159f7904b667f68453", "8ae6537d23003c5718dbd0ce9f353ff5") {
+    val _openDelegate: RoomOpenDelegate = object : RoomOpenDelegate(13,
+        "38c51a439111f84d71da0fb8f3f6a9de", "ad2db7d21b6e138c4f9739865fd94ef8") {
       public override fun createAllTables(connection: SQLiteConnection) {
         connection.execSQL("CREATE TABLE IF NOT EXISTS `orders` (`id` TEXT NOT NULL, `signalId` TEXT, `symbol` TEXT NOT NULL, `side` TEXT NOT NULL, `type` TEXT NOT NULL, `status` TEXT NOT NULL, `executionMode` TEXT NOT NULL, `quantity` REAL NOT NULL, `price` REAL, `stopPrice` REAL, `takeProfitsJson` TEXT NOT NULL, `stopLossesJson` TEXT NOT NULL, `trailingStopPercent` REAL, `trailingStopActivationPrice` REAL, `ocoLinkedOrderId` TEXT, `bracketParentId` TEXT, `timeInForce` TEXT NOT NULL, `scheduledAt` INTEGER, `filledQuantity` REAL NOT NULL, `filledPrice` REAL NOT NULL, `fee` REAL NOT NULL, `feeAsset` TEXT NOT NULL, `donationAmount` REAL NOT NULL, `realizedPnl` REAL NOT NULL, `slippage` REAL NOT NULL, `isPaperTrade` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `executedAt` INTEGER, `closedAt` INTEGER, `binanceOrderId` INTEGER, `errorMessage` TEXT, `marketType` TEXT NOT NULL, `leverage` INTEGER NOT NULL, `marginType` TEXT NOT NULL, `positionSide` TEXT NOT NULL, `reduceOnly` INTEGER NOT NULL, `closePosition` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE INDEX IF NOT EXISTS `index_orders_status` ON `orders` (`status`)")
@@ -129,14 +135,15 @@ public class TfgDatabase_Impl : TfgDatabase() {
         connection.execSQL("CREATE TABLE IF NOT EXISTS `audit_logs` (`id` TEXT NOT NULL, `action` TEXT NOT NULL, `category` TEXT NOT NULL, `details` TEXT NOT NULL, `oldValue` TEXT, `newValue` TEXT, `orderId` TEXT, `symbol` TEXT, `userId` TEXT NOT NULL, `ipAddress` TEXT, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `fee_records` (`id` TEXT NOT NULL, `orderId` TEXT NOT NULL, `symbol` TEXT NOT NULL, `feeAmount` REAL NOT NULL, `feeAsset` TEXT NOT NULL, `feeType` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `donations` (`id` TEXT NOT NULL, `orderId` TEXT NOT NULL, `amount` REAL NOT NULL, `currency` TEXT NOT NULL, `ngoName` TEXT NOT NULL, `ngoId` TEXT NOT NULL, `status` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))")
-        connection.execSQL("CREATE TABLE IF NOT EXISTS `scripts` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `code` TEXT NOT NULL, `isActive` INTEGER NOT NULL, `activeSymbol` TEXT, `strategyTemplateId` TEXT, `paramsJson` TEXT, `lastRun` INTEGER, `backtestResultJson` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
-        connection.execSQL("CREATE TABLE IF NOT EXISTS `offline_queue` (`id` TEXT NOT NULL, `signalJson` TEXT, `orderJson` TEXT, `action` TEXT NOT NULL, `priority` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `retryCount` INTEGER NOT NULL, `maxRetries` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`id`))")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `scripts` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `code` TEXT NOT NULL, `isActive` INTEGER NOT NULL, `activeSymbol` TEXT, `strategyTemplateId` TEXT, `paramsJson` TEXT, `relatedSymbolsJson` TEXT, `lastRun` INTEGER, `backtestResultJson` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `offline_queue` (`id` TEXT NOT NULL, `signalJson` TEXT, `orderJson` TEXT, `action` TEXT NOT NULL, `priority` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `retryCount` INTEGER NOT NULL, `maxRetries` INTEGER NOT NULL, `lastError` TEXT, `isProcessing` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `signal_markers` (`id` TEXT NOT NULL, `scriptId` TEXT NOT NULL, `symbol` TEXT NOT NULL, `interval` TEXT NOT NULL, `openTime` INTEGER NOT NULL, `signalType` TEXT NOT NULL, `price` REAL NOT NULL, `label` TEXT NOT NULL, `orderType` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `custom_templates` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `description` TEXT NOT NULL, `baseTemplateId` TEXT NOT NULL, `code` TEXT NOT NULL, `defaultParamsJson` TEXT, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `alerts` (`id` TEXT NOT NULL, `symbol` TEXT NOT NULL, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `condition` TEXT NOT NULL, `targetValue` REAL NOT NULL, `secondaryValue` REAL, `interval` TEXT NOT NULL, `isEnabled` INTEGER NOT NULL, `isRepeating` INTEGER NOT NULL, `repeatIntervalSec` INTEGER NOT NULL, `lastTriggeredAt` INTEGER, `triggerCount` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS `indicators` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `code` TEXT NOT NULL, `isEnabled` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+        connection.execSQL("CREATE TABLE IF NOT EXISTS `chart_drawings_snapshot` (`symbol` TEXT NOT NULL, `drawingsJson` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`symbol`))")
         connection.execSQL("CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)")
-        connection.execSQL("INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '51f59f9f55ba83159f7904b667f68453')")
+        connection.execSQL("INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '38c51a439111f84d71da0fb8f3f6a9de')")
       }
 
       public override fun dropAllTables(connection: SQLiteConnection) {
@@ -154,6 +161,7 @@ public class TfgDatabase_Impl : TfgDatabase() {
         connection.execSQL("DROP TABLE IF EXISTS `custom_templates`")
         connection.execSQL("DROP TABLE IF EXISTS `alerts`")
         connection.execSQL("DROP TABLE IF EXISTS `indicators`")
+        connection.execSQL("DROP TABLE IF EXISTS `chart_drawings_snapshot`")
       }
 
       public override fun onCreate(connection: SQLiteConnection) {
@@ -546,6 +554,8 @@ public class TfgDatabase_Impl : TfgDatabase() {
             false, 0, null, TableInfo.CREATED_FROM_ENTITY))
         _columnsScripts.put("paramsJson", TableInfo.Column("paramsJson", "TEXT", false, 0, null,
             TableInfo.CREATED_FROM_ENTITY))
+        _columnsScripts.put("relatedSymbolsJson", TableInfo.Column("relatedSymbolsJson", "TEXT",
+            false, 0, null, TableInfo.CREATED_FROM_ENTITY))
         _columnsScripts.put("lastRun", TableInfo.Column("lastRun", "INTEGER", false, 0, null,
             TableInfo.CREATED_FROM_ENTITY))
         _columnsScripts.put("backtestResultJson", TableInfo.Column("backtestResultJson", "TEXT",
@@ -587,6 +597,8 @@ public class TfgDatabase_Impl : TfgDatabase() {
             null, TableInfo.CREATED_FROM_ENTITY))
         _columnsOfflineQueue.put("lastError", TableInfo.Column("lastError", "TEXT", false, 0, null,
             TableInfo.CREATED_FROM_ENTITY))
+        _columnsOfflineQueue.put("isProcessing", TableInfo.Column("isProcessing", "INTEGER", true,
+            0, null, TableInfo.CREATED_FROM_ENTITY))
         val _foreignKeysOfflineQueue: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
         val _indicesOfflineQueue: MutableSet<TableInfo.Index> = mutableSetOf()
         val _infoOfflineQueue: TableInfo = TableInfo("offline_queue", _columnsOfflineQueue,
@@ -737,6 +749,28 @@ public class TfgDatabase_Impl : TfgDatabase() {
               | Found:
               |""".trimMargin() + _existingIndicators)
         }
+        val _columnsChartDrawingsSnapshot: MutableMap<String, TableInfo.Column> = mutableMapOf()
+        _columnsChartDrawingsSnapshot.put("symbol", TableInfo.Column("symbol", "TEXT", true, 1,
+            null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsChartDrawingsSnapshot.put("drawingsJson", TableInfo.Column("drawingsJson", "TEXT",
+            true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        _columnsChartDrawingsSnapshot.put("updatedAt", TableInfo.Column("updatedAt", "INTEGER",
+            true, 0, null, TableInfo.CREATED_FROM_ENTITY))
+        val _foreignKeysChartDrawingsSnapshot: MutableSet<TableInfo.ForeignKey> = mutableSetOf()
+        val _indicesChartDrawingsSnapshot: MutableSet<TableInfo.Index> = mutableSetOf()
+        val _infoChartDrawingsSnapshot: TableInfo = TableInfo("chart_drawings_snapshot",
+            _columnsChartDrawingsSnapshot, _foreignKeysChartDrawingsSnapshot,
+            _indicesChartDrawingsSnapshot)
+        val _existingChartDrawingsSnapshot: TableInfo = read(connection, "chart_drawings_snapshot")
+        if (!_infoChartDrawingsSnapshot.equals(_existingChartDrawingsSnapshot)) {
+          return RoomOpenDelegate.ValidationResult(false, """
+              |chart_drawings_snapshot(com.tfg.data.local.entity.DrawingSnapshotEntity).
+              | Expected:
+              |""".trimMargin() + _infoChartDrawingsSnapshot + """
+              |
+              | Found:
+              |""".trimMargin() + _existingChartDrawingsSnapshot)
+        }
         return RoomOpenDelegate.ValidationResult(true, null)
       }
     }
@@ -748,13 +782,14 @@ public class TfgDatabase_Impl : TfgDatabase() {
     val _viewTables: MutableMap<String, Set<String>> = mutableMapOf()
     return InvalidationTracker(this, _shadowTablesMap, _viewTables, "orders", "signals",
         "trading_pairs", "candles", "asset_balances", "audit_logs", "fee_records", "donations",
-        "scripts", "offline_queue", "signal_markers", "custom_templates", "alerts", "indicators")
+        "scripts", "offline_queue", "signal_markers", "custom_templates", "alerts", "indicators",
+        "chart_drawings_snapshot")
   }
 
   public override fun clearAllTables() {
     super.performClear(false, "orders", "signals", "trading_pairs", "candles", "asset_balances",
         "audit_logs", "fee_records", "donations", "scripts", "offline_queue", "signal_markers",
-        "custom_templates", "alerts", "indicators")
+        "custom_templates", "alerts", "indicators", "chart_drawings_snapshot")
   }
 
   protected override fun getRequiredTypeConverterClasses(): Map<KClass<*>, List<KClass<*>>> {
@@ -773,6 +808,8 @@ public class TfgDatabase_Impl : TfgDatabase() {
     _typeConvertersMap.put(CustomTemplateDao::class, CustomTemplateDao_Impl.getRequiredConverters())
     _typeConvertersMap.put(AlertDao::class, AlertDao_Impl.getRequiredConverters())
     _typeConvertersMap.put(IndicatorDao::class, IndicatorDao_Impl.getRequiredConverters())
+    _typeConvertersMap.put(DrawingSnapshotDao::class,
+        DrawingSnapshotDao_Impl.getRequiredConverters())
     return _typeConvertersMap
   }
 
@@ -815,4 +852,6 @@ public class TfgDatabase_Impl : TfgDatabase() {
   public override fun alertDao(): AlertDao = _alertDao.value
 
   public override fun indicatorDao(): IndicatorDao = _indicatorDao.value
+
+  public override fun drawingSnapshotDao(): DrawingSnapshotDao = _drawingSnapshotDao.value
 }

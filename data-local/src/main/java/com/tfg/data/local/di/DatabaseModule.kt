@@ -24,9 +24,9 @@ object DatabaseModule {
                 TfgDatabase.MIGRATION_3_4, TfgDatabase.MIGRATION_4_5,
                 TfgDatabase.MIGRATION_5_6, TfgDatabase.MIGRATION_6_7,
                 TfgDatabase.MIGRATION_7_8, TfgDatabase.MIGRATION_8_9,
-                TfgDatabase.MIGRATION_9_10, TfgDatabase.MIGRATION_10_11
+                TfgDatabase.MIGRATION_9_10, TfgDatabase.MIGRATION_10_11,
+                TfgDatabase.MIGRATION_11_12, TfgDatabase.MIGRATION_12_13
             )
-            .fallbackToDestructiveMigration()
             .build()
 
     @Provides fun provideOrderDao(db: TfgDatabase): OrderDao = db.orderDao()
@@ -43,4 +43,5 @@ object DatabaseModule {
     @Provides fun provideCustomTemplateDao(db: TfgDatabase): CustomTemplateDao = db.customTemplateDao()
     @Provides fun provideAlertDao(db: TfgDatabase): AlertDao = db.alertDao()
     @Provides fun provideIndicatorDao(db: TfgDatabase): IndicatorDao = db.indicatorDao()
+    @Provides fun provideDrawingSnapshotDao(db: TfgDatabase): DrawingSnapshotDao = db.drawingSnapshotDao()
 }

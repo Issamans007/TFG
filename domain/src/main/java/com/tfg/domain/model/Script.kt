@@ -8,6 +8,7 @@ data class Script(
     val activeSymbol: String? = null,
     val strategyTemplateId: String? = null,
     val params: Map<String, String> = emptyMap(),
+    val relatedSymbols: List<String> = emptyList(),
     val lastRun: Long? = null,
     val backtestResult: BacktestResult? = null,
     val createdAt: Long = System.currentTimeMillis(),
@@ -240,4 +241,60 @@ fun extractParamsFromCode(code: String): Map<String, String> {
         }
     }
     return params
+}
+
+/**
+ * Metadata for a single strategy parameter, parsed from inline `// @annotation` comments.
+ *
+ * Supported annotations on the same line as the var declaration:
+ *   var RSI_PERIOD = 14    // @int @min(2) @max(200) @label(RSI Period)
+ *   var RISK_PCT   = 1.5   // @float @min(0.1) @max(10) @label(Risk %)
+ *   var MODE       = 1     // @int @min(0) @max(2) @label(Mode)
+ */
+data class ParamMeta(
+    val isInt: Boolean = false,
+    val isFloat: Boolean = false,
+    val min: Double? = null,
+    val max: Double? = null,
+    val label: String? = null
+)
+
+/**
+ * Parse inline `// @annotation` constraints from param declaration lines.
+ * Returns a map of param name → ParamMeta for every param that has at least one annotation.
+ */
+fun extractParamMeta(code: String): Map<String, ParamMeta> {
+    val result = mutableMapOf<String, ParamMeta>()
+    val declRegex = Regex("""(?:var|let|const|val)\s+([A-Z][A-Z0-9_]*)\s*=\s*-?\d""")
+    val annotationRegex = Regex("""//\s*(@\w+(?:\([^)]*\))?\s*)+""")
+    code.lines().forEach { line ->
+        val trimmed = line.trimStart()
+        if (trimmed.startsWith("//")) return@forEach
+        val declMatch = declRegex.find(trimmed) ?: return@forEach
+        val key = declMatch.groupValues[1]
+        val annMatch = annotationRegex.find(trimmed) ?: return@forEach
+        val annText = annMatch.value
+        val isInt = "@int" in annText
+        val isFloat = "@float" in annText
+        val min = Regex("""@min\((-?\d+\.?\d*)\)""").find(annText)?.groupValues?.get(1)?.toDoubleOrNull()
+        val max = Regex("""@max\((-?\d+\.?\d*)\)""").find(annText)?.groupValues?.get(1)?.toDoubleOrNull()
+        val label = Regex("""@label\(([^)]+)\)""").find(annText)?.groupValues?.get(1)?.trim()
+        if (isInt || isFloat || min != null || max != null || label != null) {
+            result[key] = ParamMeta(isInt = isInt, isFloat = isFloat, min = min, max = max, label = label)
+        }
+    }
+    return result
+}
+
+/**
+ * Validate a single param value against its [ParamMeta] constraints.
+ * Returns an error string or null if valid.
+ */
+fun validateParam(key: String, value: String, meta: ParamMeta): String? {
+    if (value.isBlank()) return null // blank is allowed (will use code default)
+    val num = value.toDoubleOrNull() ?: return "\"$value\" is not a number"
+    if (meta.isInt && num != kotlin.math.floor(num)) return "Must be a whole number"
+    meta.min?.let { if (num < it) return "Min is $it" }
+    meta.max?.let { if (num > it) return "Max is $it" }
+    return null
 }

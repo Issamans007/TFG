@@ -222,7 +222,7 @@ interface OfflineQueueDao {
     @Query("SELECT COUNT(*) FROM offline_queue")
     fun getCount(): Flow<Int>
 
-    @Query("SELECT * FROM offline_queue WHERE retryCount < maxRetries ORDER BY priority DESC, createdAt ASC")
+    @Query("SELECT * FROM offline_queue WHERE retryCount < maxRetries AND isProcessing = 0 ORDER BY priority DESC, createdAt ASC")
     suspend fun getRetryable(): List<OfflineQueueEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -231,7 +231,14 @@ interface OfflineQueueDao {
     @Query("DELETE FROM offline_queue WHERE id = :id")
     suspend fun delete(id: String)
 
-    @Query("UPDATE offline_queue SET retryCount = retryCount + 1, lastError = :error WHERE id = :id")
+    /**
+     * Atomically claim the row for processing. Returns the number of rows updated
+     * (1 if claimed, 0 if another drainer already owns it).
+     */
+    @Query("UPDATE offline_queue SET isProcessing = 1 WHERE id = :id AND isProcessing = 0")
+    suspend fun claimForProcessing(id: String): Int
+
+    @Query("UPDATE offline_queue SET retryCount = retryCount + 1, lastError = :error, isProcessing = 0 WHERE id = :id")
     suspend fun markFailed(id: String, error: String)
 
     @Query("DELETE FROM offline_queue WHERE retryCount >= maxRetries")
@@ -266,6 +273,18 @@ interface CustomTemplateDao {
 
     @Query("DELETE FROM custom_templates WHERE id = :id")
     suspend fun delete(id: String)
+}
+
+@Dao
+interface DrawingSnapshotDao {
+    @Query("SELECT * FROM chart_drawings_snapshot WHERE symbol = :symbol")
+    suspend fun getForSymbol(symbol: String): DrawingSnapshotEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(snapshot: DrawingSnapshotEntity)
+
+    @Query("DELETE FROM chart_drawings_snapshot WHERE symbol = :symbol")
+    suspend fun deleteForSymbol(symbol: String)
 }
 
 @Dao

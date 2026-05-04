@@ -10,8 +10,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,7 +42,7 @@ import com.tfg.domain.model.SignalType
 import com.tfg.domain.model.OrderSide
 import com.tfg.feature.chart.TradingViewChart
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
@@ -149,7 +152,7 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
                             readOnly = true,
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedPair) },
                             colors = com.tfg.core.ui.tfgTextFieldColors(),
-                            modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                             singleLine = true
                         )
                         ExposedDropdownMenu(
@@ -197,7 +200,7 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
                             readOnly = true,
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedInterval) },
                             colors = com.tfg.core.ui.tfgTextFieldColors(),
-                            modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                             singleLine = true
                         )
                         ExposedDropdownMenu(
@@ -683,6 +686,7 @@ fun ScriptScreen(viewModel: ScriptViewModel = hiltViewModel()) {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun EditorTab(
     state: ScriptUiState,
@@ -940,7 +944,7 @@ private fun EditorTab(
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                     modifier = Modifier.height(28.dp)
                                 ) {
-                                    Icon(Icons.Default.CompareArrows, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(14.dp))
+                                    Icon(Icons.AutoMirrored.Filled.CompareArrows, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(14.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         if (state.showBuyAndHoldComparison) "Hide Compare" else "Compare B&H",
@@ -1115,7 +1119,7 @@ private fun EditorTab(
                                 Text("${(state.optimizationProgress * 100).toInt()}%", fontSize = 10.sp, color = Green500, fontWeight = FontWeight.Bold)
                             }
                             LinearProgressIndicator(
-                                progress = state.optimizationProgress,
+                                progress = { state.optimizationProgress },
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                 color = Green500
                             )
@@ -1135,7 +1139,7 @@ private fun EditorTab(
                     // Results table
                     if (state.optimizationResults.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Divider(color = DarkBorder, thickness = 0.5.dp)
+                        HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text("Results (${state.optimizationResults.size} combinations)", fontSize = 11.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold)
                         // Sort buttons
@@ -1240,32 +1244,100 @@ private fun EditorTab(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             row.forEach { (key, value) ->
-                                OutlinedTextField(
-                                    value = value,
-                                    onValueChange = { viewModel.updateParam(key, it) },
-                                    label = {
-                                        Text(
-                                            key.replace("_", " ").lowercase()
-                                                .replaceFirstChar { it.uppercase() },
-                                            fontSize = 9.sp, maxLines = 1
+                                val paramError = state.paramErrors[key]
+                                val meta = state.paramMeta[key]
+                                val displayLabel = meta?.label
+                                    ?: key.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    OutlinedTextField(
+                                        value = value,
+                                        onValueChange = { viewModel.updateParam(key, it) },
+                                        label = {
+                                            Text(
+                                                displayLabel,
+                                                fontSize = 9.sp, maxLines = 1
+                                            )
+                                        },
+                                        isError = paramError != null,
+                                        colors = com.tfg.core.ui.tfgTextFieldColors(),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(52.dp),
+                                        textStyle = androidx.compose.ui.text.TextStyle(
+                                            fontSize = 12.sp, color = TextPrimary
                                         )
-                                    },
-                                    colors = com.tfg.core.ui.tfgTextFieldColors(),
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(52.dp),
-                                    textStyle = androidx.compose.ui.text.TextStyle(
-                                        fontSize = 12.sp, color = TextPrimary
                                     )
-                                )
+                                    if (paramError != null) {
+                                        Text(
+                                            paramError,
+                                            fontSize = 9.sp,
+                                            color = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.padding(start = 4.dp, top = 1.dp)
+                                        )
+                                    }
+                                }
                             }
                             // If odd number of items, add spacer for alignment
                             if (row.size == 1) {
                                 Spacer(modifier = Modifier.weight(1f))
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // ─── Related Symbols Panel ────────────────────────────────
+        AnimatedVisibility(visible = state.showSettings) {
+            TfgCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    Text(
+                        "Related Symbols (_related)",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AccentBlue
+                    )
+                    Text(
+                        "Access other pairs in strategy via _related[\"SYMBOL\"]",
+                        fontSize = 10.sp, color = TextTertiary, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp)
+                    )
+                    val relatedSymbols = state.selectedScript?.relatedSymbols ?: emptyList()
+                    if (relatedSymbols.isNotEmpty()) {
+                        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            relatedSymbols.forEach { sym ->
+                                AssistChip(
+                                    onClick = { viewModel.removeRelatedSymbol(sym) },
+                                    label = { Text(sym, fontSize = 11.sp) },
+                                    trailingIcon = {
+                                        Icon(Icons.Default.Close, "Remove", modifier = Modifier.size(14.dp))
+                                    }
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+                    var relatedInput by remember { mutableStateOf("") }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = relatedInput,
+                            onValueChange = { relatedInput = it },
+                            placeholder = { Text("e.g. BTCUSDT", fontSize = 11.sp) },
+                            colors = com.tfg.core.ui.tfgTextFieldColors(),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = TextPrimary)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        TextButton(onClick = {
+                            if (relatedInput.isNotBlank()) {
+                                viewModel.addRelatedSymbol(relatedInput)
+                                relatedInput = ""
+                            }
+                        }) { Text("Add", fontSize = 12.sp, color = AccentBlue) }
                     }
                 }
             }
@@ -1477,7 +1549,7 @@ private fun EditorTab(
                     }
                     // ── Extended metrics ──
                     Spacer(modifier = Modifier.height(6.dp))
-                    Divider(color = DarkBorder, thickness = 0.5.dp)
+                    HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1525,7 +1597,7 @@ private fun EditorTab(
                     // ── Per-trade breakdown ──
                     if (result.trades.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        Divider(color = DarkBorder, thickness = 0.5.dp)
+                        HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                         Spacer(modifier = Modifier.height(4.dp))
                         var showTrades by remember { mutableStateOf(false) }
                         Row(
@@ -1557,7 +1629,7 @@ private fun EditorTab(
                                 Text("Reason", fontSize = 9.sp, color = TextTertiary, modifier = Modifier.weight(1.7f))
                                 Text("PnL", fontSize = 9.sp, color = TextTertiary, modifier = Modifier.weight(0.8f), textAlign = TextAlign.End)
                             }
-                            Divider(color = DarkBorder, thickness = 0.5.dp)
+                            HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                             val shown = result.trades.takeLast(50)
                             shown.forEach { t ->
                                 Row(
@@ -1611,7 +1683,7 @@ private fun EditorTab(
                     }
                     // ── C5: Export button ──
                     Spacer(modifier = Modifier.height(6.dp))
-                    Divider(color = DarkBorder, thickness = 0.5.dp)
+                    HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         TextButton(onClick = { viewModel.exportBacktestCsv() }) {
@@ -1628,7 +1700,7 @@ private fun EditorTab(
                     // ── C4: Monte Carlo results ──
                     state.monteCarloResult?.let { mc ->
                         Spacer(modifier = Modifier.height(4.dp))
-                        Divider(color = DarkBorder, thickness = 0.5.dp)
+                        HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text("Monte Carlo (${mc.simulations} sims)", fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = TextPrimary)
                         Spacer(modifier = Modifier.height(4.dp))
@@ -1690,7 +1762,7 @@ private fun EditorTab(
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     LinearProgressIndicator(
-                        progress = state.backtestProgress,
+                        progress = { state.backtestProgress },
                         modifier = Modifier.fillMaxWidth(),
                         color = AccentBlue
                     )
@@ -1974,7 +2046,7 @@ private fun TemplatesTab(
                         // Expandable code preview
                         AnimatedVisibility(visible = expanded) {
                             Column(modifier = Modifier.padding(top = 8.dp)) {
-                                Divider(color = DarkBorder, thickness = 0.5.dp)
+                                HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text("Code Preview", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = TextTertiary)
                                 Spacer(modifier = Modifier.height(4.dp))
@@ -2001,7 +2073,7 @@ private fun TemplatesTab(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            Divider(color = DarkBorder, thickness = 0.5.dp)
+            HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(8.dp))
         }
 
@@ -2079,7 +2151,7 @@ private fun TemplatesTab(
                     // Expandable code preview
                     AnimatedVisibility(visible = expanded) {
                         Column(modifier = Modifier.padding(top = 8.dp)) {
-                            Divider(color = DarkBorder, thickness = 0.5.dp)
+                            HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("Code Preview", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = TextTertiary)
                             Spacer(modifier = Modifier.height(4.dp))
@@ -2486,6 +2558,16 @@ return {
     {pct: 0.8, quantityPct: 50}   // close 50% at -0.8%
   ]
 };""".trimIndent())
+            DocText(
+                "⚠ Live trading note: Binance OCO brackets support only one TP per order. " +
+                "When multi-level TPs are configured, the app automatically places the nearest TP " +
+                "(closest to entry price) as the exchange-side bracket target. All remaining TP " +
+                "levels are monitored and executed by the app itself — the exchange will not " +
+                "fire them if the app is killed or loses connectivity. " +
+                "A warning is emitted to the Console each time a multi-TP order is placed " +
+                "so you always know which level is exchange-protected. " +
+                "In backtesting all TP levels behave identically (no exchange limitation applies)."
+            )
             DocSubSection("Multi-Signal (Array Return)")
             DocText(
                 "Return an array to target multiple pairs simultaneously. " +
@@ -2805,7 +2887,8 @@ Sharpe ratio:     interval-aware annualization""".trimIndent())
                 "Average, largest win and loss",
                 "Max consecutive wins / losses",
                 "Expectancy per trade",
-                "Equity curve with chart overlay"
+                "Equity curve with chart overlay",
+                "Trade Breakdown table — collapsible list showing entry date, side, entry→exit price, entry/exit reason codes, and P&L for each trade (last 50 inline; full history via Export CSV)"
             ))
             DocText(
                 "Signal markers (BUY/SELL/PAT_BUY/TP_HIT/SL_HIT/CLOSE) are plotted on the chart automatically. " +
@@ -2958,8 +3041,12 @@ Sharpe ratio:     interval-aware annualization""".trimIndent())
         // ── 14. Drawing Tools ──
         DocSection("14. Drawing Tools on Chart") {
             DocText(
-                "The chart includes 15 drawing tools accessible via the toolbar toggle " +
-                "button (pencil icon). Long-press any tool for quick access."
+                "The chart includes 15 drawing tools accessible via the pencil toggle " +
+                "button in the chart toolbar. Tap the pencil icon to show or hide the " +
+                "drawing toolbar. When a tool is active, a contextual hint strip appears " +
+                "at the top of the chart guiding you through each placement step " +
+                "(e.g. \"Trend: tap first point\" → \"Trend: tap second point\"). " +
+                "The hint disappears automatically once the drawing is complete."
             )
             DocBullets(listOf(
                 "Horizontal Line, Vertical Line — static reference levels",
@@ -2973,7 +3060,9 @@ Sharpe ratio:     interval-aware annualization""".trimIndent())
             ))
             DocText(
                 "Drawing tools support undo, clear all, color picker, " +
-                "selection/move of existing drawings, and delete."
+                "selection/move of existing drawings, and delete. " +
+                "The drawing toolbar is hidden by default; the pencil button's tint turns " +
+                "blue while tools are visible."
             )
         }
 
@@ -3020,6 +3109,7 @@ Sharpe ratio:     interval-aware annualization""".trimIndent())
                 "Always use enough candles — indicators like sma(candles, 50) need at least 50 bars",
                 "Use stopLossPct and takeProfitPct to manage risk automatically",
                 "Use takeProfitLevels for graduated exits (scale out partially at each level)",
+                "Multi-TP live trading: only the nearest TP is placed on-exchange as a bracket — keep the app running for remaining levels to fire",
                 "Start with longer timeframes (1h, 4h) for more reliable signals",
                 "Test different param values using the Settings panel (gear icon) before going live",
                 "Save working strategies as custom templates for reuse",
@@ -3032,7 +3122,8 @@ Sharpe ratio:     interval-aware annualization""".trimIndent())
                 "Use pivotHigh()/pivotLow() to detect support and resistance levels",
                 "All strategies auto-save before running a backtest",
                 "5-second execution timeout — avoid heavy loops over all candles",
-                "The QuickJS context caches between bars — editing code or params rebuilds it"
+                "The QuickJS context caches between bars — editing code or params rebuilds it",
+                "Trading Plan session hours are evaluated in UTC — set them relative to exchange time, not your local clock"
             ))
         }
 
@@ -3066,6 +3157,67 @@ pivotLow(c, l, r)   input(name, default)
 // ── GLOBALS ───────────────────────────
 _candles  _params  _state  _account
 console.log/warn/error/info  color.*""".trimIndent())
+        }
+
+        // ── 22. Trading Plan ──
+        DocSection("22. Trading Plan") {
+            DocText(
+                "The Trading Plan dialog (accessible from the Script screen plan button) " +
+                "configures how the live trading engine manages positions created by your " +
+                "strategy. Settings here override signal-level values for live execution " +
+                "but do not affect backtests."
+            )
+            DocSubSection("Market & Leverage")
+            DocBullets(listOf(
+                "Spot — standard spot trading (OCO brackets for TP/SL)",
+                "Futures USDM — USDT-margined perpetual contracts with configurable leverage (1–125×) and margin mode (Isolated / Cross)",
+                "Allow SHORT — when enabled, a SELL signal opens a short position in Futures mode instead of closing a long"
+            ))
+            DocSubSection("Position Sizing")
+            DocText(
+                "Size as a percentage of total account equity. Applies to every trade opened " +
+                "by this strategy unless the signal specifies its own sizePct."
+            )
+            DocSubSection("Stop Loss Modes")
+            DocCode(mono, """
+PCT          — fixed percentage from entry (e.g. 1.5%)
+ATR          — ATR(N) × multiplier from entry
+               (adapts SL to current volatility)
+FIXED_OFFSET — absolute price offset from entry price""".trimIndent())
+            DocSubSection("Take Profit Levels")
+            DocText(
+                "Add one or more TP levels (value + qty%). Each level closes the specified " +
+                "portion of the position when price reaches that target."
+            )
+            DocText(
+                "⚠ Only the nearest TP level is placed on the exchange as a bracket order. " +
+                "Additional levels are managed by the app. The Plan dialog shows an orange " +
+                "warning when more than one TP level is configured."
+            )
+            DocSubSection("Move SL to Breakeven")
+            DocText(
+                "When enabled, the stop-loss is automatically moved to the entry price " +
+                "after the first TP level fires — locking in a risk-free remainder position."
+            )
+            DocSubSection("Restrict Trading Hours (UTC)")
+            DocText(
+                "When enabled, trades are blocked outside the specified hour range. " +
+                "Hours are always interpreted as UTC to match the Binance exchange clock, " +
+                "regardless of the device's local timezone or daylight-saving setting. " +
+                "Overnight windows (e.g. 22:00 – 02:00) are supported automatically."
+            )
+            DocCode(mono, """
+From: 08 (UTC)   To: 20 (UTC)
+→ Trades only allowed between 08:00 and 20:00 UTC
+
+From: 22 (UTC)   To: 04 (UTC)
+→ Overnight window — 22:00 tonight to 04:00 tomorrow""".trimIndent())
+            DocSubSection("Cooldown Bars")
+            DocText(
+                "Number of bars that must pass after a trade closes before the strategy " +
+                "is allowed to open another position. Prevents re-entering immediately " +
+                "after a stop-out."
+            )
         }
 
         DocSection("19. Replay Mode") {
@@ -3195,28 +3347,55 @@ private enum class BlockType(val label: String, val category: String) {
     ADX_STRONG("ADX > Value", "Trend"),
     SUPERTREND_BULLISH("Supertrend Bullish", "Trend"),
     SUPERTREND_BEARISH("Supertrend Bearish", "Trend"),
+    // Oscillator additions
+    CCI_ABOVE("CCI > Value", "Oscillator"),
+    CCI_BELOW("CCI < Value", "Oscillator"),
+    WILLIAMS_R_OVERSOLD("Williams %R < -80 (Oversold)", "Oscillator"),
+    WILLIAMS_R_OVERBOUGHT("Williams %R > -20 (Overbought)", "Oscillator"),
+    // Volatility additions
+    KELTNER_BREAKOUT_UP("Price > Keltner Upper", "Volatility"),
+    KELTNER_BREAKOUT_DOWN("Price < Keltner Lower", "Volatility"),
+    DONCHIAN_BREAKOUT_UP("Donchian Channel Breakout Up", "Volatility"),
+    DONCHIAN_BREAKOUT_DOWN("Donchian Channel Breakout Down", "Volatility"),
+    ATR_FILTER("ATR > Min Value", "Volatility"),
+    // Ichimoku
+    ICHIMOKU_BULL("Ichimoku Cloud Bullish", "Trend"),
+    ICHIMOKU_BEAR("Ichimoku Cloud Bearish", "Trend"),
+    // Pivot Points
+    PRICE_ABOVE_PIVOT_R1("Price > Pivot R1", "Trend"),
+    PRICE_BELOW_PIVOT_S1("Price < Pivot S1", "Trend"),
 }
+
+private data class TpLevel(val pct: String = "", val qty: String = "100")
+
+private data class ConditionGroup(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val conditions: List<ConditionBlock> = emptyList(),
+    val logic: String = "AND"
+)
 
 private data class ConditionBlock(
     val id: String = java.util.UUID.randomUUID().toString(),
     val type: BlockType,
-    val params: MutableMap<String, String> = mutableMapOf()
+    val params: MutableMap<String, String> = mutableMapOf(),
+    val negate: Boolean = false
 )
 
 private data class VisualRule(
     val id: String = java.util.UUID.randomUUID().toString(),
-    val action: String = "BUY", // BUY, SELL, CLOSE_IF_LONG, CLOSE_IF_SHORT
-    val conditions: List<ConditionBlock> = emptyList(),
-    val logic: String = "AND", // AND, OR
+    val action: String = "BUY", // BUY, SELL, CLOSE_IF_LONG, CLOSE_IF_SHORT, HOLD
+    val conditionGroups: List<ConditionGroup> = listOf(ConditionGroup()),
+    val logic: String = "AND", // combines groups: AND, OR
     val sizePct: String = "2.0",
     val stopLossPct: String = "",
-    val takeProfitPct: String = ""
+    val takeProfitLevels: List<TpLevel> = emptyList()
 )
 
 @Composable
 private fun VisualBuilderTab(onGenerateCode: (String) -> Unit) {
     var rules by remember { mutableStateOf(listOf(VisualRule())) }
-    var showBlockPicker by remember { mutableStateOf<String?>(null) } // rule ID requesting new block
+    // Pair<ruleId, groupId>
+    var showBlockPicker by remember { mutableStateOf<Pair<String, String>?>(null) }
     var generatedCode by remember { mutableStateOf("") }
     var showPreview by remember { mutableStateOf(false) }
 
@@ -3263,10 +3442,15 @@ private fun VisualBuilderTab(onGenerateCode: (String) -> Unit) {
                 onDeleteRule = {
                     if (rules.size > 1) rules = rules.toMutableList().also { it.removeAt(ruleIndex) }
                 },
-                onAddCondition = { showBlockPicker = rule.id },
-                onRemoveCondition = { condId ->
-                    val updatedConds = rule.conditions.filter { it.id != condId }
-                    rules = rules.toMutableList().also { it[ruleIndex] = rule.copy(conditions = updatedConds) }
+                onAddCondition = { groupId -> showBlockPicker = rule.id to groupId },
+                onRemoveCondition = { groupId, condId ->
+                    val grpIdx = rule.conditionGroups.indexOfFirst { it.id == groupId }
+                    if (grpIdx >= 0) {
+                        val grp = rule.conditionGroups[grpIdx]
+                        val updatedGrp = grp.copy(conditions = grp.conditions.filter { it.id != condId })
+                        val updatedGroups = rule.conditionGroups.toMutableList().also { it[grpIdx] = updatedGrp }
+                        rules = rules.toMutableList().also { it[ruleIndex] = rule.copy(conditionGroups = updatedGroups) }
+                    }
                 }
             )
         }
@@ -3287,15 +3471,21 @@ private fun VisualBuilderTab(onGenerateCode: (String) -> Unit) {
     }
 
     // Block picker dialog
-    showBlockPicker?.let { ruleId ->
+    showBlockPicker?.let { (ruleId, groupId) ->
         BlockPickerDialog(
             onSelect = { blockType ->
                 val ruleIdx = rules.indexOfFirst { it.id == ruleId }
                 if (ruleIdx >= 0) {
                     val rule = rules[ruleIdx]
-                    val newBlock = ConditionBlock(type = blockType, params = getDefaultParams(blockType).toMutableMap())
-                    rules = rules.toMutableList().also {
-                        it[ruleIdx] = rule.copy(conditions = rule.conditions + newBlock)
+                    val grpIdx = rule.conditionGroups.indexOfFirst { it.id == groupId }
+                    if (grpIdx >= 0) {
+                        val grp = rule.conditionGroups[grpIdx]
+                        val newBlock = ConditionBlock(type = blockType, params = getDefaultParams(blockType).toMutableMap())
+                        val updatedGrp = grp.copy(conditions = grp.conditions + newBlock)
+                        val updatedGroups = rule.conditionGroups.toMutableList().also { it[grpIdx] = updatedGrp }
+                        rules = rules.toMutableList().also {
+                            it[ruleIdx] = rule.copy(conditionGroups = updatedGroups)
+                        }
                     }
                 }
                 showBlockPicker = null
@@ -3347,7 +3537,7 @@ private fun VisualBuilderTab(onGenerateCode: (String) -> Unit) {
                         colors = ButtonDefaults.buttonColors(containerColor = AccentBlue),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Default.Send, null, modifier = Modifier.size(14.dp))
+                        Icon(Icons.AutoMirrored.Filled.Send, null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Use This Strategy", fontSize = 13.sp)
                     }
@@ -3363,12 +3553,13 @@ private fun VisualRuleCard(
     ruleIndex: Int,
     onUpdateRule: (VisualRule) -> Unit,
     onDeleteRule: () -> Unit,
-    onAddCondition: () -> Unit,
-    onRemoveCondition: (String) -> Unit
+    onAddCondition: (groupId: String) -> Unit,
+    onRemoveCondition: (groupId: String, condId: String) -> Unit
 ) {
     val actionColor = when (rule.action) {
         "BUY" -> Green400
         "SELL" -> Red400
+        "HOLD" -> AccentOrange
         else -> AccentOrange
     }
 
@@ -3393,11 +3584,11 @@ private fun VisualRuleCard(
 
             // Action selector
             Text("Action", fontSize = 10.sp, color = TextTertiary)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("BUY", "SELL", "CLOSE_IF_LONG", "CLOSE_IF_SHORT").forEach { action ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                listOf("BUY", "SELL", "CLOSE_IF_LONG", "CLOSE_IF_SHORT", "HOLD").forEach { action ->
                     val sel = rule.action == action
                     val c = when (action) {
-                        "BUY" -> Green400; "SELL" -> Red400; else -> AccentOrange
+                        "BUY" -> Green400; "SELL" -> Red400; "HOLD" -> AccentOrange; else -> AccentOrange
                     }
                     Box(
                         modifier = Modifier
@@ -3417,15 +3608,14 @@ private fun VisualRuleCard(
                 }
             }
 
-            // Logic selector (AND/OR)
-            if (rule.conditions.size > 1) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Combine with: ", fontSize = 10.sp, color = TextTertiary)
+            // Top-level logic (between groups)
+            if (rule.conditionGroups.size > 1) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Groups combined with:", fontSize = 10.sp, color = TextTertiary)
                     listOf("AND", "OR").forEach { logic ->
                         val sel = rule.logic == logic
                         Box(
                             modifier = Modifier
-                                .padding(horizontal = 2.dp)
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(if (sel) AccentBlue.copy(alpha = 0.2f) else Color.Transparent)
                                 .clickable { onUpdateRule(rule.copy(logic = logic)) }
@@ -3439,35 +3629,108 @@ private fun VisualRuleCard(
                 }
             }
 
-            // Conditions
+            // Condition groups
             Text("IF", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = actionColor)
-            rule.conditions.forEachIndexed { idx, cond ->
-                if (idx > 0) {
-                    Text(rule.logic, fontSize = 10.sp, color = AccentBlue,
-                        modifier = Modifier.padding(start = 16.dp))
+            rule.conditionGroups.forEachIndexed { gIdx, group ->
+                if (gIdx > 0) {
+                    Text("  ${rule.logic}  ", fontSize = 10.sp, color = AccentBlue,
+                        fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 2.dp))
                 }
-                ConditionBlockCard(
-                    block = cond,
-                    onUpdateBlock = { updated ->
-                        val updatedConds = rule.conditions.toMutableList()
-                        updatedConds[idx] = updated
-                        onUpdateRule(rule.copy(conditions = updatedConds))
-                    },
-                    onRemove = { onRemoveCondition(cond.id) }
-                )
+                // Group box
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = DarkSurface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, AccentBlue.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                ) {
+                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Group header: logic toggle + optional delete
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (group.conditions.size > 1) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("Group logic:", fontSize = 9.sp, color = TextTertiary)
+                                    listOf("AND", "OR").forEach { lg ->
+                                        val sel = group.logic == lg
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(if (sel) AccentPurple.copy(alpha = 0.2f) else Color.Transparent)
+                                                .clickable {
+                                                    val updatedGroups = rule.conditionGroups.toMutableList()
+                                                        .also { it[gIdx] = group.copy(logic = lg) }
+                                                    onUpdateRule(rule.copy(conditionGroups = updatedGroups))
+                                                }
+                                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(lg, fontSize = 10.sp,
+                                                color = if (sel) AccentPurple else TextTertiary,
+                                                fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                                        }
+                                    }
+                                }
+                            } else {
+                                Spacer(modifier = Modifier.width(1.dp))
+                            }
+                            if (rule.conditionGroups.size > 1) {
+                                IconButton(
+                                    onClick = {
+                                        val updatedGroups = rule.conditionGroups.toMutableList().also { it.removeAt(gIdx) }
+                                        onUpdateRule(rule.copy(conditionGroups = updatedGroups))
+                                    },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, "Remove group", tint = TextTertiary, modifier = Modifier.size(12.dp))
+                                }
+                            }
+                        }
+                        // Conditions within group
+                        group.conditions.forEachIndexed { cIdx, cond ->
+                            if (cIdx > 0) {
+                                Text(group.logic, fontSize = 10.sp, color = AccentPurple,
+                                    fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp))
+                            }
+                            ConditionBlockCard(
+                                block = cond,
+                                onUpdateBlock = { updated ->
+                                    val updatedConds = group.conditions.toMutableList().also { it[cIdx] = updated }
+                                    val updatedGroups = rule.conditionGroups.toMutableList()
+                                        .also { it[gIdx] = group.copy(conditions = updatedConds) }
+                                    onUpdateRule(rule.copy(conditionGroups = updatedGroups))
+                                },
+                                onRemove = { onRemoveCondition(group.id, cond.id) }
+                            )
+                        }
+                        // Add condition button
+                        OutlinedButton(
+                            onClick = { onAddCondition(group.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = PaddingValues(6.dp),
+                            border = BorderStroke(1.dp, DarkBorder)
+                        ) {
+                            Icon(Icons.Default.Add, null, modifier = Modifier.size(12.dp), tint = TextSecondary)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Condition", fontSize = 11.sp, color = TextSecondary)
+                        }
+                    }
+                }
             }
 
-            // Add condition button
-            OutlinedButton(
-                onClick = onAddCondition,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(6.dp),
-                border = BorderStroke(1.dp, DarkBorder)
+            // Add condition group button
+            TextButton(
+                onClick = {
+                    onUpdateRule(rule.copy(conditionGroups = rule.conditionGroups + ConditionGroup()))
+                },
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
             ) {
-                Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp), tint = TextSecondary)
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(12.dp), tint = AccentBlue)
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Add Condition", fontSize = 11.sp, color = TextSecondary)
+                Text("Add Condition Group  (for nested AND/OR)", fontSize = 10.sp, color = AccentBlue)
             }
 
             // Size / SL / TP (for BUY/SELL)
@@ -3479,9 +3742,43 @@ private fun VisualRuleCard(
                     CompactField("SL %", rule.stopLossPct, Modifier.weight(1f)) {
                         onUpdateRule(rule.copy(stopLossPct = it))
                     }
-                    CompactField("TP %", rule.takeProfitPct, Modifier.weight(1f)) {
-                        onUpdateRule(rule.copy(takeProfitPct = it))
+                }
+                // Multi-TP levels
+                Text("Take Profit Levels", fontSize = 10.sp, color = TextTertiary)
+                rule.takeProfitLevels.forEachIndexed { tpIdx, tp ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CompactField("TP ${tpIdx + 1} %", tp.pct, Modifier.weight(1f)) { v ->
+                            val updated = rule.takeProfitLevels.toMutableList().also { it[tpIdx] = tp.copy(pct = v) }
+                            onUpdateRule(rule.copy(takeProfitLevels = updated))
+                        }
+                        CompactField("Qty %", tp.qty, Modifier.weight(1f)) { v ->
+                            val updated = rule.takeProfitLevels.toMutableList().also { it[tpIdx] = tp.copy(qty = v) }
+                            onUpdateRule(rule.copy(takeProfitLevels = updated))
+                        }
+                        IconButton(
+                            onClick = {
+                                val updated = rule.takeProfitLevels.toMutableList().also { it.removeAt(tpIdx) }
+                                onUpdateRule(rule.copy(takeProfitLevels = updated))
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(Icons.Default.Close, "Remove TP", tint = Red400, modifier = Modifier.size(14.dp))
+                        }
                     }
+                }
+                OutlinedButton(
+                    onClick = { onUpdateRule(rule.copy(takeProfitLevels = rule.takeProfitLevels + TpLevel())) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(6.dp),
+                    border = BorderStroke(1.dp, AccentGold.copy(alpha = 0.4f))
+                ) {
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(12.dp), tint = AccentGold)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add TP Level", fontSize = 11.sp, color = AccentGold)
                 }
             }
 
@@ -3524,7 +3821,20 @@ private fun ConditionBlockCard(
                     .size(8.dp)
                     .background(blockColor, RoundedCornerShape(4.dp))
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            // NOT toggle
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (block.negate) Red400.copy(alpha = 0.2f) else Color.Transparent)
+                    .border(1.dp, if (block.negate) Red400 else DarkBorder, RoundedCornerShape(4.dp))
+                    .clickable { onUpdateBlock(block.copy(negate = !block.negate)) }
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            ) {
+                Text("NOT", fontSize = 8.sp, color = if (block.negate) Red400 else TextTertiary,
+                    fontWeight = if (block.negate) FontWeight.Bold else FontWeight.Normal)
+            }
+            Spacer(modifier = Modifier.width(6.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(block.type.label, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold)
                 // Parameter fields
@@ -3633,6 +3943,13 @@ private fun getDefaultParams(type: BlockType): Map<String, String> = when (type)
     BlockType.STOCH_OVERSOLD, BlockType.STOCH_OVERBOUGHT -> mapOf("K" to "14", "D" to "3")
     BlockType.ADX_STRONG -> mapOf("Period" to "14", "Value" to "25")
     BlockType.SUPERTREND_BULLISH, BlockType.SUPERTREND_BEARISH -> mapOf("Period" to "10", "Mult" to "3.0")
+    BlockType.CCI_ABOVE, BlockType.CCI_BELOW -> mapOf("Period" to "20", "Value" to if (type == BlockType.CCI_ABOVE) "100" else "-100")
+    BlockType.WILLIAMS_R_OVERSOLD, BlockType.WILLIAMS_R_OVERBOUGHT -> mapOf("Period" to "14")
+    BlockType.KELTNER_BREAKOUT_UP, BlockType.KELTNER_BREAKOUT_DOWN -> mapOf("Period" to "20", "Mult" to "1.5")
+    BlockType.DONCHIAN_BREAKOUT_UP, BlockType.DONCHIAN_BREAKOUT_DOWN -> mapOf("Period" to "20")
+    BlockType.ATR_FILTER -> mapOf("Period" to "14", "Min" to "0.5")
+    BlockType.ICHIMOKU_BULL, BlockType.ICHIMOKU_BEAR -> emptyMap()
+    BlockType.PRICE_ABOVE_PIVOT_R1, BlockType.PRICE_BELOW_PIVOT_S1 -> emptyMap()
 }
 
 private fun generateStrategyCode(rules: List<VisualRule>): String {
@@ -3644,15 +3961,20 @@ private fun generateStrategyCode(rules: List<VisualRule>): String {
     // Collect all needed params as var declarations
     val allParams = mutableSetOf<String>()
     rules.forEach { rule ->
-        rule.conditions.forEach { cond ->
-            cond.params.forEach { (key, value) ->
-                val paramName = "${cond.type.name}_${key}".uppercase()
-                allParams.add("var $paramName = $value;")
+        rule.conditionGroups.forEach { grp ->
+            grp.conditions.forEach { cond ->
+                cond.params.forEach { (key, value) ->
+                    val paramName = "${cond.type.name}_${key}".uppercase()
+                    allParams.add("var $paramName = $value;")
+                }
             }
         }
         if (rule.sizePct.isNotBlank()) allParams.add("var POSITION_SIZE_PCT = ${rule.sizePct};")
         if (rule.stopLossPct.isNotBlank()) allParams.add("var STOP_LOSS_PCT = ${rule.stopLossPct};")
-        if (rule.takeProfitPct.isNotBlank()) allParams.add("var TAKE_PROFIT_PCT = ${rule.takeProfitPct};")
+        rule.takeProfitLevels.forEachIndexed { idx, tp ->
+            if (tp.pct.isNotBlank()) allParams.add("var TP${idx + 1}_PCT = ${tp.pct};")
+            if (tp.qty.isNotBlank()) allParams.add("var TP${idx + 1}_QTY = ${tp.qty};")
+        }
     }
     allParams.sorted().forEach { sb.appendLine(it) }
     sb.appendLine()
@@ -3664,11 +3986,21 @@ private fun generateStrategyCode(rules: List<VisualRule>): String {
     sb.appendLine()
 
     rules.forEach { rule ->
-        val conditions = rule.conditions.map { cond -> generateConditionCode(cond) }
-        if (conditions.isEmpty()) return@forEach
+        // Build group expressions
+        val activeGroups = rule.conditionGroups.filter { it.conditions.isNotEmpty() }
+        if (activeGroups.isEmpty()) return@forEach
 
-        val joiner = if (rule.logic == "AND") " && " else " || "
-        val condExpr = conditions.joinToString(joiner)
+        val groupExprs = activeGroups.map { group ->
+            val condExprs = group.conditions.map { cond ->
+                val base = generateConditionCode(cond)
+                if (cond.negate) "!($base)" else base
+            }
+            val inner = condExprs.joinToString(if (group.logic == "AND") " && " else " || ")
+            if (group.conditions.size > 1) "($inner)" else inner
+        }
+        val topJoiner = if (rule.logic == "AND") " && " else " || "
+        val condExpr = groupExprs.joinToString(topJoiner)
+
         sb.appendLine("    // Rule: ${rule.action}")
         sb.appendLine("    if ($condExpr) {")
 
@@ -3677,9 +4009,15 @@ private fun generateStrategyCode(rules: List<VisualRule>): String {
                 sb.append("        return {type: '${rule.action}'")
                 if (rule.sizePct.isNotBlank()) sb.append(", sizePct: POSITION_SIZE_PCT")
                 if (rule.stopLossPct.isNotBlank()) sb.append(", stopLossPct: STOP_LOSS_PCT")
-                if (rule.takeProfitPct.isNotBlank()) sb.append(", takeProfitPct: TAKE_PROFIT_PCT")
+                if (rule.takeProfitLevels.isNotEmpty()) {
+                    val levels = rule.takeProfitLevels.mapIndexed { idx, _ ->
+                        "{pct: TP${idx + 1}_PCT, quantityPct: TP${idx + 1}_QTY}"
+                    }.joinToString(", ")
+                    sb.append(", takeProfitLevels: [$levels]")
+                }
                 sb.appendLine("};")
             }
+            "HOLD" -> sb.appendLine("        return {type: 'HOLD'};")
             else -> sb.appendLine("        return {type: '${rule.action}'};")
         }
         sb.appendLine("    }")
@@ -3752,6 +4090,50 @@ private fun generateConditionCode(cond: ConditionBlock): String {
         BlockType.SUPERTREND_BEARISH -> {
             val per = p["Period"] ?: "10"; val mult = p["Mult"] ?: "3.0"
             "supertrend(candles, $per, $mult)[1] === false"
+        }
+        // ── New indicator blocks ──────────────────────────────────
+        BlockType.CCI_ABOVE, BlockType.CCI_BELOW -> {
+            val per = p["Period"] ?: "20"; val val_ = p["Value"] ?: "100"
+            val op = if (cond.type == BlockType.CCI_ABOVE) ">" else "<"
+            "(function(){ var n=${per}; var sl=candles.slice(-n); var tp=sl.map(function(c){return(c.high+c.low+c.close)/3;}); var avg=tp.reduce(function(s,v){return s+v;},0)/n; var md=tp.reduce(function(s,v){return s+Math.abs(v-avg);},0)/n; return md>0?(tp[tp.length-1]-avg)/(0.015*md)$op${val_}:false; })()"
+        }
+        BlockType.WILLIAMS_R_OVERSOLD -> {
+            val per = p["Period"] ?: "14"
+            "(function(){ var n=${per}; var sl=candles.slice(-n); var hi=sl.reduce(function(m,c){return Math.max(m,c.high);},-Infinity); var lo=sl.reduce(function(m,c){return Math.min(m,c.low);},Infinity); var wr=hi!==lo?-100*(hi-last.close)/(hi-lo):-50; return wr<-80; })()"
+        }
+        BlockType.WILLIAMS_R_OVERBOUGHT -> {
+            val per = p["Period"] ?: "14"
+            "(function(){ var n=${per}; var sl=candles.slice(-n); var hi=sl.reduce(function(m,c){return Math.max(m,c.high);},-Infinity); var lo=sl.reduce(function(m,c){return Math.min(m,c.low);},Infinity); var wr=hi!==lo?-100*(hi-last.close)/(hi-lo):-50; return wr>-20; })()"
+        }
+        BlockType.KELTNER_BREAKOUT_UP, BlockType.KELTNER_BREAKOUT_DOWN -> {
+            val per = p["Period"] ?: "20"; val mult = p["Mult"] ?: "1.5"
+            val op = if (cond.type == BlockType.KELTNER_BREAKOUT_UP) ">" else "<"
+            val band = if (cond.type == BlockType.KELTNER_BREAKOUT_UP) "mid+atr*m" else "mid-atr*m"
+            "(function(){ var n=${per},m=${mult}; var sl=candles.slice(-n); var mid=ema(candles,n); var atr=0; for(var j=1;j<sl.length;j++){var tr=Math.max(sl[j].high-sl[j].low,Math.abs(sl[j].high-sl[j-1].close),Math.abs(sl[j].low-sl[j-1].close));atr+=tr;} atr/=(n-1); return last.close${op}(${band}); })()"
+        }
+        BlockType.DONCHIAN_BREAKOUT_UP -> {
+            val per = p["Period"] ?: "20"
+            "(function(){ var sl=candles.slice(-(${per}+1),-1); var hi=sl.reduce(function(m,c){return Math.max(m,c.high);},-Infinity); return last.close>hi; })()"
+        }
+        BlockType.DONCHIAN_BREAKOUT_DOWN -> {
+            val per = p["Period"] ?: "20"
+            "(function(){ var sl=candles.slice(-(${per}+1),-1); var lo=sl.reduce(function(m,c){return Math.min(m,c.low);},Infinity); return last.close<lo; })()"
+        }
+        BlockType.ATR_FILTER -> {
+            val per = p["Period"] ?: "14"; val min = p["Min"] ?: "0.5"
+            "(function(){ var n=${per}; var sl=candles.slice(-n); var atr=0; for(var j=1;j<sl.length;j++){var tr=Math.max(sl[j].high-sl[j].low,Math.abs(sl[j].high-sl[j-1].close),Math.abs(sl[j].low-sl[j-1].close));atr+=tr;} atr/=(n-1); return atr>${min}; })()"
+        }
+        BlockType.ICHIMOKU_BULL -> {
+            "(function(){ var n=candles.length; if(n<52) return false; function mid(arr,s,l){var hi=-Infinity,lo=Infinity; for(var j=s;j<s+l;j++){hi=Math.max(hi,arr[j].high);lo=Math.min(lo,arr[j].low);} return(hi+lo)/2;} var tk=mid(candles,n-9,9); var kj=mid(candles,n-26,26); var sA=(mid(candles,n-52,9)+mid(candles,n-52,26))/2; var sB=mid(candles,n-52,52); return last.close>tk&&last.close>kj&&last.close>Math.max(sA,sB); })()"
+        }
+        BlockType.ICHIMOKU_BEAR -> {
+            "(function(){ var n=candles.length; if(n<52) return false; function mid(arr,s,l){var hi=-Infinity,lo=Infinity; for(var j=s;j<s+l;j++){hi=Math.max(hi,arr[j].high);lo=Math.min(lo,arr[j].low);} return(hi+lo)/2;} var tk=mid(candles,n-9,9); var kj=mid(candles,n-26,26); var sA=(mid(candles,n-52,9)+mid(candles,n-52,26))/2; var sB=mid(candles,n-52,52); return last.close<tk&&last.close<kj&&last.close<Math.min(sA,sB); })()"
+        }
+        BlockType.PRICE_ABOVE_PIVOT_R1 -> {
+            "(function(){ var prev=candles[candles.length-2]; var pp=(prev.high+prev.low+prev.close)/3; var r1=2*pp-prev.low; return last.close>r1; })()"
+        }
+        BlockType.PRICE_BELOW_PIVOT_S1 -> {
+            "(function(){ var prev=candles[candles.length-2]; var pp=(prev.high+prev.low+prev.close)/3; var s1=2*pp-prev.high; return last.close<s1; })()"
         }
     }
 }

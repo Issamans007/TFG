@@ -1,8 +1,10 @@
 package com.tfg.feature.chart;
 
 import androidx.lifecycle.SavedStateHandle;
+import com.tfg.data.local.dao.DrawingSnapshotDao;
 import com.tfg.domain.model.IndicatorExecutor;
 import com.tfg.domain.model.ScriptExecutor;
+import com.tfg.domain.repository.AlertRepository;
 import com.tfg.domain.repository.IndicatorRepository;
 import com.tfg.domain.repository.MarketRepository;
 import com.tfg.domain.repository.ScriptRepository;
@@ -40,23 +42,31 @@ public final class CoinDetailViewModel_Factory implements Factory<CoinDetailView
 
   private final Provider<ScriptExecutor> scriptExecutorProvider;
 
+  private final Provider<DrawingSnapshotDao> drawingSnapshotDaoProvider;
+
+  private final Provider<AlertRepository> alertRepositoryProvider;
+
   public CoinDetailViewModel_Factory(Provider<SavedStateHandle> savedStateHandleProvider,
       Provider<MarketRepository> marketRepositoryProvider,
       Provider<ScriptRepository> scriptRepositoryProvider,
       Provider<IndicatorRepository> indicatorRepositoryProvider,
       Provider<IndicatorExecutor> indicatorExecutorProvider,
-      Provider<ScriptExecutor> scriptExecutorProvider) {
+      Provider<ScriptExecutor> scriptExecutorProvider,
+      Provider<DrawingSnapshotDao> drawingSnapshotDaoProvider,
+      Provider<AlertRepository> alertRepositoryProvider) {
     this.savedStateHandleProvider = savedStateHandleProvider;
     this.marketRepositoryProvider = marketRepositoryProvider;
     this.scriptRepositoryProvider = scriptRepositoryProvider;
     this.indicatorRepositoryProvider = indicatorRepositoryProvider;
     this.indicatorExecutorProvider = indicatorExecutorProvider;
     this.scriptExecutorProvider = scriptExecutorProvider;
+    this.drawingSnapshotDaoProvider = drawingSnapshotDaoProvider;
+    this.alertRepositoryProvider = alertRepositoryProvider;
   }
 
   @Override
   public CoinDetailViewModel get() {
-    return newInstance(savedStateHandleProvider.get(), marketRepositoryProvider.get(), scriptRepositoryProvider.get(), indicatorRepositoryProvider.get(), indicatorExecutorProvider.get(), scriptExecutorProvider.get());
+    return newInstance(savedStateHandleProvider.get(), marketRepositoryProvider.get(), scriptRepositoryProvider.get(), indicatorRepositoryProvider.get(), indicatorExecutorProvider.get(), scriptExecutorProvider.get(), drawingSnapshotDaoProvider.get(), alertRepositoryProvider.get());
   }
 
   public static CoinDetailViewModel_Factory create(
@@ -65,14 +75,17 @@ public final class CoinDetailViewModel_Factory implements Factory<CoinDetailView
       Provider<ScriptRepository> scriptRepositoryProvider,
       Provider<IndicatorRepository> indicatorRepositoryProvider,
       Provider<IndicatorExecutor> indicatorExecutorProvider,
-      Provider<ScriptExecutor> scriptExecutorProvider) {
-    return new CoinDetailViewModel_Factory(savedStateHandleProvider, marketRepositoryProvider, scriptRepositoryProvider, indicatorRepositoryProvider, indicatorExecutorProvider, scriptExecutorProvider);
+      Provider<ScriptExecutor> scriptExecutorProvider,
+      Provider<DrawingSnapshotDao> drawingSnapshotDaoProvider,
+      Provider<AlertRepository> alertRepositoryProvider) {
+    return new CoinDetailViewModel_Factory(savedStateHandleProvider, marketRepositoryProvider, scriptRepositoryProvider, indicatorRepositoryProvider, indicatorExecutorProvider, scriptExecutorProvider, drawingSnapshotDaoProvider, alertRepositoryProvider);
   }
 
   public static CoinDetailViewModel newInstance(SavedStateHandle savedStateHandle,
       MarketRepository marketRepository, ScriptRepository scriptRepository,
       IndicatorRepository indicatorRepository, IndicatorExecutor indicatorExecutor,
-      ScriptExecutor scriptExecutor) {
-    return new CoinDetailViewModel(savedStateHandle, marketRepository, scriptRepository, indicatorRepository, indicatorExecutor, scriptExecutor);
+      ScriptExecutor scriptExecutor, DrawingSnapshotDao drawingSnapshotDao,
+      AlertRepository alertRepository) {
+    return new CoinDetailViewModel(savedStateHandle, marketRepository, scriptRepository, indicatorRepository, indicatorExecutor, scriptExecutor, drawingSnapshotDao, alertRepository);
   }
 }

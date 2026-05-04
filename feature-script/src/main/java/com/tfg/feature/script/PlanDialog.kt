@@ -241,6 +241,25 @@ fun PlanDialog(
                         Text("Move SL to breakeven after first TP", fontSize = 13.sp, color = TextPrimary)
                     }
 
+                    // Warn when the user has configured more than one TP level so
+                    // they know that only the nearest TP is protected on-exchange.
+                    if (tpRows.count { it.value > 0.0 && it.qtyPct > 0.0 } > 1) {
+                        Surface(
+                            color  = AccentOrange.copy(alpha = 0.12f),
+                            shape  = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "⚠ Multi-level TPs: only the nearest TP will be placed on the exchange " +
+                                "(Binance OCO supports one TP per bracket). Remaining TP levels are " +
+                                "managed by this app — keep it running to avoid missed exits.",
+                                fontSize = 11.sp,
+                                color    = AccentOrange,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
                     PlanDivider()
 
                     // ── Trading hours ───────────────────────────────

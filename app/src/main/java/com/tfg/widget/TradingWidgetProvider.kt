@@ -15,7 +15,6 @@ import java.util.*
 class TradingWidgetProvider : AppWidgetProvider() {
 
     companion object {
-        const val ACTION_REFRESH = "com.tfg.widget.REFRESH"
         private const val PREFS_NAME = "tfg_widget"
         private const val KEY_PNL = "widget_pnl"
         private const val KEY_PNL_PCT = "widget_pnl_pct"
@@ -56,15 +55,6 @@ class TradingWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         for (widgetId in appWidgetIds) {
             updateWidget(context, appWidgetManager, widgetId)
-        }
-    }
-
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        if (intent.action == ACTION_REFRESH) {
-            val manager = AppWidgetManager.getInstance(context)
-            val ids = manager.getAppWidgetIds(ComponentName(context, TradingWidgetProvider::class.java))
-            onUpdate(context, manager, ids)
         }
     }
 

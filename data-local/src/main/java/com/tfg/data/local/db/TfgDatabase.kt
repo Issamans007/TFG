@@ -22,9 +22,10 @@ import com.tfg.data.local.entity.*
         SignalMarkerEntity::class,
         CustomTemplateEntity::class,
         AlertEntity::class,
-        IndicatorEntity::class
+        IndicatorEntity::class,
+        DrawingSnapshotEntity::class
     ],
-    version = 11,
+    version = 13,
     exportSchema = true
 )
 abstract class TfgDatabase : RoomDatabase() {
@@ -42,6 +43,7 @@ abstract class TfgDatabase : RoomDatabase() {
     abstract fun customTemplateDao(): CustomTemplateDao
     abstract fun alertDao(): AlertDao
     abstract fun indicatorDao(): IndicatorDao
+    abstract fun drawingSnapshotDao(): DrawingSnapshotDao
 
     companion object {
         const val DATABASE_NAME = "tfg_database"
@@ -152,6 +154,19 @@ abstract class TfgDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE orders ADD COLUMN positionSide TEXT NOT NULL DEFAULT 'BOTH'")
                 db.execSQL("ALTER TABLE orders ADD COLUMN reduceOnly INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE orders ADD COLUMN closePosition INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS chart_drawings_snapshot (symbol TEXT NOT NULL PRIMARY KEY, drawingsJson TEXT NOT NULL, updatedAt INTEGER NOT NULL)")
+                db.execSQL("ALTER TABLE scripts ADD COLUMN relatedSymbolsJson TEXT DEFAULT NULL")
+            }
+        }
+
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE offline_queue ADD COLUMN isProcessing INTEGER NOT NULL DEFAULT 0")
             }
         }
 

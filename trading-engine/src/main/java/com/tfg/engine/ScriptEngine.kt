@@ -123,6 +123,9 @@ class ScriptEngine @Inject constructor(
     override fun evaluate(code: String, candles: List<Candle>, params: Map<String, String>, account: ScriptAccount?, htfCandles: Map<String, List<Candle>>): StrategySignal =
         execute(code, candles, params, account, htfCandles)
 
+    override fun evaluate(code: String, candles: List<Candle>, params: Map<String, String>, account: ScriptAccount?, htfCandles: Map<String, List<Candle>>, relatedCandles: Map<String, List<Candle>>): StrategySignal =
+        execute(code, candles, params, account, htfCandles, relatedCandles)
+
     override fun evaluateMulti(code: String, candles: List<Candle>, params: Map<String, String>, account: ScriptAccount?): List<TargetedSignal> =
         executeMulti(code, candles, params, account)
 
@@ -264,7 +267,8 @@ class ScriptEngine @Inject constructor(
         candles: List<Candle>,
         params: Map<String, String>,
         account: ScriptAccount? = null,
-        htfCandles: Map<String, List<Candle>> = emptyMap()
+        htfCandles: Map<String, List<Candle>> = emptyMap(),
+        relatedCandles: Map<String, List<Candle>> = emptyMap()
     ): StrategySignal = withWorker { worker ->
         memoryPressureGuard()
         val js = getOrCreateJs(worker, code, params)
@@ -290,6 +294,13 @@ class ScriptEngine @Inject constructor(
                 js.evaluate("var _htf = $htfJs;", "htf")
             } else {
                 js.evaluate("var _htf = {};", "htf")
+            }
+
+            // 5. Inject related-symbol candles (_related)
+            if (relatedCandles.isNotEmpty()) {
+                js.evaluate("var _related = ${buildRelatedJson(relatedCandles)};", "related")
+            } else {
+                js.evaluate("var _related = {};", "related")
             }
 
             // 5. Call strategy() and parse result
@@ -471,6 +482,18 @@ class ScriptEngine @Inject constructor(
         return sb.toString()
     }
 
+    /** Build JSON object mapping symbol names to candle arrays, e.g. {"ETHUSDT":[...], "BNBUSDT":[...]} */
+    private fun buildRelatedJson(relatedCandles: Map<String, List<Candle>>): String {
+        val sb = StringBuilder("{")
+        relatedCandles.entries.forEachIndexed { idx, (symbol, candles) ->
+            if (idx > 0) sb.append(",")
+            sb.append("\"$symbol\":")
+            sb.append(buildCandlesJson(candles))
+        }
+        sb.append("}")
+        return sb.toString()
+    }
+
     // ─── Signal parser (Gson) ───────────────────────────────────────
 
     /** Flat DTO mirroring the JS object returned by strategy(). */
@@ -556,7 +579,8 @@ class ScriptEngine @Inject constructor(
     private fun buildAccountJs(account: ScriptAccount?): String {
         if (account == null) return "_account = null;"
         val side = account.positionSide?.let { "\"$it\"" } ?: "null"
-        return """_account = {equity:${account.equity},balance:${account.balance},positionSide:$side,positionPnl:${account.positionPnl},positionSize:${account.positionSize},positionEntry:${account.positionEntry}};"""
+        val lastResult = account.lastTradeResult?.let { "\"$it\"" } ?: "null"
+        return """_account = {equity:${account.equity},balance:${account.balance},positionSide:$side,positionPnl:${account.positionPnl},positionSize:${account.positionSize},positionEntry:${account.positionEntry},lastTradeResult:$lastResult,pendingOrderCount:${account.pendingOrderCount},consecutiveLosses:${account.consecutiveLosses}};"""
     }
 
     private fun captureLogs(js: QuickJs): List<String> {

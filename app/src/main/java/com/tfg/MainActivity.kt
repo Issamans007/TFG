@@ -23,6 +23,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Prevent the app from appearing in the recent-apps thumbnail and block
+        // OS-level screenshot / screen-recording capture on all screens.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         enableEdgeToEdge()
 
         setContent {

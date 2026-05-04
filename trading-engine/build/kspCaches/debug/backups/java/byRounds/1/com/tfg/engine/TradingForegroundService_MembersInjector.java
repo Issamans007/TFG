@@ -1,11 +1,15 @@
 package com.tfg.engine;
 
+import com.tfg.data.local.dao.AlertDao;
 import com.tfg.data.local.dao.OfflineQueueDao;
 import com.tfg.data.local.dao.OrderDao;
+import com.tfg.data.local.dao.TradingPairDao;
 import com.tfg.data.remote.api.UserDataStreamManager;
 import com.tfg.data.remote.websocket.WebSocketManager;
 import com.tfg.domain.repository.AuditRepository;
+import com.tfg.domain.repository.PortfolioRepository;
 import com.tfg.domain.repository.TradingRepository;
+import com.tfg.domain.service.ConsoleBus;
 import dagger.MembersInjector;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.InjectedFieldSignature;
@@ -45,7 +49,15 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
 
   private final Provider<TradingRepository> tradingRepositoryProvider;
 
+  private final Provider<PortfolioRepository> portfolioRepositoryProvider;
+
+  private final Provider<ConsoleBus> consoleBusProvider;
+
   private final Provider<UserDataStreamManager> userDataStreamManagerProvider;
+
+  private final Provider<AlertDao> alertDaoProvider;
+
+  private final Provider<TradingPairDao> tradingPairDaoProvider;
 
   public TradingForegroundService_MembersInjector(
       Provider<WebSocketManager> webSocketManagerProvider, Provider<RiskEngine> riskEngineProvider,
@@ -55,7 +67,10 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
       Provider<EngineManager> engineManagerProvider,
       Provider<AuditRepository> auditRepositoryProvider,
       Provider<TradingRepository> tradingRepositoryProvider,
-      Provider<UserDataStreamManager> userDataStreamManagerProvider) {
+      Provider<PortfolioRepository> portfolioRepositoryProvider,
+      Provider<ConsoleBus> consoleBusProvider,
+      Provider<UserDataStreamManager> userDataStreamManagerProvider,
+      Provider<AlertDao> alertDaoProvider, Provider<TradingPairDao> tradingPairDaoProvider) {
     this.webSocketManagerProvider = webSocketManagerProvider;
     this.riskEngineProvider = riskEngineProvider;
     this.tradeExecutorProvider = tradeExecutorProvider;
@@ -65,7 +80,11 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
     this.engineManagerProvider = engineManagerProvider;
     this.auditRepositoryProvider = auditRepositoryProvider;
     this.tradingRepositoryProvider = tradingRepositoryProvider;
+    this.portfolioRepositoryProvider = portfolioRepositoryProvider;
+    this.consoleBusProvider = consoleBusProvider;
     this.userDataStreamManagerProvider = userDataStreamManagerProvider;
+    this.alertDaoProvider = alertDaoProvider;
+    this.tradingPairDaoProvider = tradingPairDaoProvider;
   }
 
   public static MembersInjector<TradingForegroundService> create(
@@ -76,8 +95,11 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
       Provider<EngineManager> engineManagerProvider,
       Provider<AuditRepository> auditRepositoryProvider,
       Provider<TradingRepository> tradingRepositoryProvider,
-      Provider<UserDataStreamManager> userDataStreamManagerProvider) {
-    return new TradingForegroundService_MembersInjector(webSocketManagerProvider, riskEngineProvider, tradeExecutorProvider, orderDaoProvider, offlineQueueDaoProvider, strategyRunnerProvider, engineManagerProvider, auditRepositoryProvider, tradingRepositoryProvider, userDataStreamManagerProvider);
+      Provider<PortfolioRepository> portfolioRepositoryProvider,
+      Provider<ConsoleBus> consoleBusProvider,
+      Provider<UserDataStreamManager> userDataStreamManagerProvider,
+      Provider<AlertDao> alertDaoProvider, Provider<TradingPairDao> tradingPairDaoProvider) {
+    return new TradingForegroundService_MembersInjector(webSocketManagerProvider, riskEngineProvider, tradeExecutorProvider, orderDaoProvider, offlineQueueDaoProvider, strategyRunnerProvider, engineManagerProvider, auditRepositoryProvider, tradingRepositoryProvider, portfolioRepositoryProvider, consoleBusProvider, userDataStreamManagerProvider, alertDaoProvider, tradingPairDaoProvider);
   }
 
   @Override
@@ -91,7 +113,11 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
     injectEngineManager(instance, engineManagerProvider.get());
     injectAuditRepository(instance, auditRepositoryProvider.get());
     injectTradingRepository(instance, tradingRepositoryProvider.get());
+    injectPortfolioRepository(instance, portfolioRepositoryProvider.get());
+    injectConsoleBus(instance, consoleBusProvider.get());
     injectUserDataStreamManager(instance, userDataStreamManagerProvider.get());
+    injectAlertDao(instance, alertDaoProvider.get());
+    injectTradingPairDao(instance, tradingPairDaoProvider.get());
   }
 
   @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.webSocketManager")
@@ -146,9 +172,31 @@ public final class TradingForegroundService_MembersInjector implements MembersIn
     instance.tradingRepository = tradingRepository;
   }
 
+  @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.portfolioRepository")
+  public static void injectPortfolioRepository(TradingForegroundService instance,
+      PortfolioRepository portfolioRepository) {
+    instance.portfolioRepository = portfolioRepository;
+  }
+
+  @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.consoleBus")
+  public static void injectConsoleBus(TradingForegroundService instance, ConsoleBus consoleBus) {
+    instance.consoleBus = consoleBus;
+  }
+
   @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.userDataStreamManager")
   public static void injectUserDataStreamManager(TradingForegroundService instance,
       UserDataStreamManager userDataStreamManager) {
     instance.userDataStreamManager = userDataStreamManager;
+  }
+
+  @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.alertDao")
+  public static void injectAlertDao(TradingForegroundService instance, AlertDao alertDao) {
+    instance.alertDao = alertDao;
+  }
+
+  @InjectedFieldSignature("com.tfg.engine.TradingForegroundService.tradingPairDao")
+  public static void injectTradingPairDao(TradingForegroundService instance,
+      TradingPairDao tradingPairDao) {
+    instance.tradingPairDao = tradingPairDao;
   }
 }

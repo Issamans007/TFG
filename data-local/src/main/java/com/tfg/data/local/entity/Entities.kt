@@ -172,6 +172,7 @@ data class ScriptEntity(
     val activeSymbol: String? = null,
     val strategyTemplateId: String? = null,
     val paramsJson: String? = null,
+    val relatedSymbolsJson: String? = null,
     val lastRun: Long? = null,
     val backtestResultJson: String? = null,
     val createdAt: Long,
@@ -188,7 +189,9 @@ data class OfflineQueueEntity(
     val createdAt: Long,
     val retryCount: Int = 0,
     val maxRetries: Int = 5,
-    val lastError: String? = null
+    val lastError: String? = null,
+    /** True while a drain coroutine owns this row. Prevents double-processing on rapid re-drain. */
+    val isProcessing: Boolean = false
 )
 
 @Entity(tableName = "signal_markers")
@@ -233,6 +236,13 @@ data class AlertEntity(
     val triggerCount: Int = 0,
     val createdAt: Long,
     val updatedAt: Long
+)
+
+@Entity(tableName = "chart_drawings_snapshot")
+data class DrawingSnapshotEntity(
+    @PrimaryKey val symbol: String,
+    val drawingsJson: String,
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "indicators")

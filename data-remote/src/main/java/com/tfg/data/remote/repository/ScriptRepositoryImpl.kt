@@ -338,6 +338,101 @@ class ScriptRepositoryImpl @Inject constructor(
             var rawSellCount = 0
             var spotShortSkipped = 0
 
+            // ── Pre-fetch HTF candles for strategies that reference _htf[interval] ──
+            val htfTimeframes = Regex("""_htf\[["']([^"']+)["']\]""".trimMargin())
+                .findAll(userCode).map { it.groupValues[1] }.toSet().filter { it != interval }.toSet()
+            val htfCandlesMap = mutableMapOf<String, List<Candle>>()
+            if (htfTimeframes.isNotEmpty()) {
+                consoleBus.info(
+                    ConsoleSource.BACKTEST,
+                    title = "Fetching HTF candles",
+                    message = "Detected HTF timeframes: ${htfTimeframes.joinToString()} for $symbol",
+                    symbol = symbol
+                )
+                for (htfInterval in htfTimeframes) {
+                    val htfIntervalMs = when (htfInterval) {
+                        "1m" -> 60_000L; "5m" -> 300_000L; "15m" -> 900_000L; "1h" -> 3_600_000L
+                        "4h" -> 14_400_000L; "1d" -> 86_400_000L
+                        else -> { Timber.w("Unknown HTF interval: $htfInterval"); continue }
+                    }
+                    val htfCount = (spanMs / htfIntervalMs).toInt().coerceAtLeast(1).coerceAtMost(3000)
+                    try {
+                        val htfKlines = mutableListOf<List<Any>>()
+                        var htfStart = effectiveStartMs
+                        while (htfKlines.size < htfCount) {
+                            val batchLimit = minOf(1000, htfCount - htfKlines.size)
+                            val klines = try {
+                                binanceApi.getKlines(symbol, htfInterval, batchLimit, htfStart)
+                            } catch (_: Exception) { emptyList() }
+                            if (klines.isEmpty()) break
+                            htfKlines.addAll(klines)
+                            val lastClose = (klines.last()[6] as Double).toLong()
+                            htfStart = lastClose + 1
+                            if (klines.size < batchLimit) break
+                        }
+                        if (htfKlines.isNotEmpty()) {
+                            htfCandlesMap[htfInterval] = htfKlines.map { k ->
+                                Candle(
+                                    symbol = symbol, interval = htfInterval,
+                                    openTime = (k[0] as Double).toLong(),
+                                    open = (k[1] as String).toDouble(),
+                                    high = (k[2] as String).toDouble(),
+                                    low = (k[3] as String).toDouble(),
+                                    close = (k[4] as String).toDouble(),
+                                    volume = (k[5] as String).toDouble(),
+                                    closeTime = (k[6] as Double).toLong(),
+                                    quoteVolume = (k[7] as String).toDouble(),
+                                    numberOfTrades = (k[8] as Double).toInt()
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Timber.w(e, "HTF fetch failed for $htfInterval")
+                    }
+                }
+            }
+
+            // ── Pre-fetch related-symbol candles for _related access in strategy ──
+            val relatedSymbols: List<String> = scriptEntity?.relatedSymbolsJson?.let {
+                try { gson.fromJson<List<String>>(it, object : TypeToken<List<String>>() {}.type) }
+                catch (_: Exception) { emptyList() }
+            } ?: emptyList()
+            val relatedCandlesMap = mutableMapOf<String, List<Candle>>()
+            for (relSym in relatedSymbols) {
+                try {
+                    val relCount = (spanMs / intervalMs).toInt().coerceAtLeast(1).coerceAtMost(3000)
+                    val relKlines = mutableListOf<List<Any>>()
+                    var relStart = effectiveStartMs
+                    while (relKlines.size < relCount) {
+                        val batchLimit = minOf(1000, relCount - relKlines.size)
+                        val klines = try { binanceApi.getKlines(relSym, interval, batchLimit, relStart) } catch (_: Exception) { emptyList() }
+                        if (klines.isEmpty()) break
+                        relKlines.addAll(klines)
+                        val lastClose = (klines.last()[6] as Double).toLong()
+                        relStart = lastClose + 1
+                        if (klines.size < batchLimit) break
+                    }
+                    if (relKlines.isNotEmpty()) {
+                        relatedCandlesMap[relSym] = relKlines.map { k ->
+                            Candle(
+                                symbol = relSym, interval = interval,
+                                openTime = (k[0] as Double).toLong(),
+                                open = (k[1] as String).toDouble(),
+                                high = (k[2] as String).toDouble(),
+                                low = (k[3] as String).toDouble(),
+                                close = (k[4] as String).toDouble(),
+                                volume = (k[5] as String).toDouble(),
+                                closeTime = (k[6] as Double).toLong(),
+                                quoteVolume = (k[7] as String).toDouble(),
+                                numberOfTrades = (k[8] as Double).toInt()
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e, "Related candles fetch failed for $relSym")
+                }
+            }
+
             fun closePos(exitPrice: Double, exitTime: Long, barIndex: Int, partialQty: Double? = null, closeType: SignalType = SignalType.CLOSE) {
                 val pos = position ?: return
                 val closeQty = partialQty ?: pos.qty
@@ -448,6 +543,14 @@ class ScriptRepositoryImpl @Inject constructor(
                 val sliceStart = maxOf(0, i + 1 - 500)
                 val slice = candles.subList(sliceStart, i + 1)
                 val pos = position
+                val lastTrade = trades.lastOrNull()
+                val lastTradeResult = when {
+                    lastTrade == null -> null
+                    lastTrade.pnl > 0 -> "WIN"
+                    lastTrade.pnl < 0 -> "LOSS"
+                    else -> "EVEN"
+                }
+                val consLosses = trades.takeLastWhile { it.pnl < 0 }.size
                 val acct = ScriptAccount(
                     equity = equity,
                     balance = equity,
@@ -457,9 +560,20 @@ class ScriptRepositoryImpl @Inject constructor(
                         else (pos.entry - bar.close) * pos.qty
                     } else 0.0,
                     positionSize = pos?.qty ?: 0.0,
-                    positionEntry = pos?.entry ?: 0.0
+                    positionEntry = pos?.entry ?: 0.0,
+                    lastTradeResult = lastTradeResult,
+                    pendingOrderCount = 0,
+                    consecutiveLosses = consLosses
                 )
-                val rawSig = scriptExecutor.evaluate(userCode, slice, scriptParams, acct)
+                // Build per-bar HTF slice: only include HTF candles visible at current bar's open time
+                val htfBarSlice: Map<String, List<Candle>> = if (htfCandlesMap.isNotEmpty()) {
+                    htfCandlesMap.mapValues { (_, htfList) ->
+                        htfList.filter { it.openTime <= bar.openTime }.let { filtered ->
+                            if (filtered.size > 500) filtered.subList(filtered.size - 500, filtered.size) else filtered
+                        }
+                    }.filterValues { it.isNotEmpty() }
+                } else emptyMap()
+                val rawSig = scriptExecutor.evaluate(userCode, slice, scriptParams, acct, htfBarSlice, relatedCandlesMap)
                 when (rawSig) {
                     is StrategySignal.BUY -> rawBuyCount++
                     is StrategySignal.SELL -> rawSellCount++
@@ -759,7 +873,10 @@ class ScriptRepositoryImpl @Inject constructor(
                     positionSide = if (positions.isNotEmpty()) positions.values.first().side.name else null,
                     positionPnl = totalPosPnl,
                     positionSize = positions.values.sumOf { it.qty },
-                    positionEntry = positions.values.firstOrNull()?.entryPrice ?: 0.0
+                    positionEntry = positions.values.firstOrNull()?.entryPrice ?: 0.0,
+                    lastTradeResult = trades.lastOrNull()?.let { if (it.pnl > 0) "WIN" else if (it.pnl < 0) "LOSS" else "EVEN" },
+                    pendingOrderCount = 0,
+                    consecutiveLosses = trades.takeLastWhile { it.pnl < 0 }.size
                 )
 
                 val slice = primaryCandles.subList(0, i + 1)

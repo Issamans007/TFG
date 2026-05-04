@@ -116,10 +116,6 @@ fun DashboardScreen(
                         Text("Console", fontSize = 11.sp, color = AccentBlue, fontWeight = FontWeight.Medium)
                     }
                 }
-                StatusChip(
-                    text = if (state.botActive) "BOT ACTIVE" else "BOT OFF",
-                    color = if (state.botActive) Green500 else Red400
-                )
             }
         }
 

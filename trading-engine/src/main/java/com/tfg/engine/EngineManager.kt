@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.SharingStarted
 import timber.log.Timber
 import javax.inject.Inject
@@ -57,5 +58,15 @@ class EngineManager @Inject constructor(
     fun stopAll() {
         stopBot()
         stopAlerts()
+    }
+
+    /**
+     * Cancel the internal StateFlow-sharing scope. Call this from
+     * [TradingForegroundService.onDestroy] so the singleton scope is
+     * properly cleaned up when the service terminates.
+     */
+    fun shutdown() {
+        stopAll()
+        scope.cancel()
     }
 }

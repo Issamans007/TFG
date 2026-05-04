@@ -1,3 +1,171 @@
-Chart division-by-zero at ChartScreen.kt:1314 when range==0 (flat equity)	🟡 Medium — UI crash, not money	~5 minutes.
-Multi-step trade flow in TradeExecutor.kt:116 not wrapped in db.withTransaction { }	🟡 Medium — partial-state if crash mid-trade	~2 hours.
-Kline backfill on WS reconnect — only signals, not bars	🟢 Low	~1 hour
+PHASE 1 — Critical (blocks real strategy building)
+1. [FALSE — already implemented] HTF data is empty during backtest
+ScriptRepositoryImpl.backtestScript() pre-fetches htfCandlesMap before the backtest loop and injects a per-bar htfBarSlice. Fully working in both live and backtest.
+
+2. [FALSE — already implemented] _account has no order history
+ScriptAccount already has lastTradeResult, pendingOrderCount, and consecutiveLosses fields, all populated correctly in both StrategyRunner and the backtest loop.
+
+3. [FALSE — already implemented] Visual Builder: multi-TP, NOT logic, nested groups
+VisualBuilderTab already has: TpLevel data class + takeProfitLevels: List<TpLevel> on VisualRule (multi-TP), ConditionBlock.negate + NOT toggle button (NOT logic), ConditionGroup with per-group AND/OR logic + cross-group logic on VisualRule (nested groups), and HOLD as an explicit action value.
+
+4. [FALSE — already implemented] Visual Builder: missing 13 indicator blocks
+BlockType enum already includes all 13: CCI_ABOVE/BELOW, WILLIAMS_R_OVERSOLD/OVERBOUGHT, KELTNER_BREAKOUT_UP/DOWN, DONCHIAN_BREAKOUT_UP/DOWN, ATR_FILTER, ICHIMOKU_BULL/BEAR, PRICE_ABOVE_PIVOT_R1, PRICE_BELOW_PIVOT_S1.
+
+5. [FALSE — already implemented] No param validation
+extractParamMeta() parses // @int @min @max @label annotations. validateParam() is called live in ScriptViewModel.updateParam(). paramErrors and paramMeta are in UI state and shown inline in the Settings panel.
+
+
+
+PHASE 2 — Significant Limitations
+6. [FIXED] Drawing tools lost on app restart
+Drawings are stored in Room DB (chart_drawings_snapshot table, DB v12). On drawing add/undo/clear → onDrawingsSynced bridge → Room upsert. On chart load → savedDrawingsJson injected via setDrawings() JS.
+
+7. [FIXED] Alert Lines don't fire notifications
+Alert line drawing now saves AlertEntity to Room via CoinDetailViewModel.onDrawingAdded(). TradingForegroundService.monitorPositions() checks enabled PRICE alerts against live lastPrice each tick and fires a high-priority notification via firePriceAlertNotification().
+
+8. [FIXED] No multi-symbol read access in strategy
+Added _related: Map<String, List<Candle>>. User specifies related symbols in strategy settings (new Related Symbols panel in ScriptScreen). StrategyRunner.fetchRelatedCandles() pre-fetches live candles; ScriptRepositoryImpl backtestScript pre-fetches backtest candles. ScriptEngine injects as _related JS variable.
+
+9. [FALSE — already implemented] No indicator settings panel on chart
+Indicator chip tap-to-edit bottom sheet already implemented.
+
+10. [FALSE — already implemented] Monte Carlo exists in code but has no UI
+Monte Carlo button already present in backtest results UI.
+
+
+Phase 3 - Third "Not done" report validation and fixes:
+
+## Critical / Security
+
+1. [TRUE — FIXED] Release build has no signing configuration.
+   - app/build.gradle.kts release block had no signingConfigs block and no signingConfig reference.
+   - Fix: added signingConfigs.create("release") block reading RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD,
+     RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD from local.properties first, then env vars as fallback.
+     Release buildType now sets signingConfig when the storeFile actually exists.
+   - NOTE: You must add the four RELEASE_* keys to local.properties (and add local.properties to .gitignore)
+     or export them as CI environment variables before producing a signed release APK/AAB.
+
+2. [TRUE — FIXED] No FLAG_SECURE protection — app contents visible in recent-apps and capturable by
+   OS screenshot/screen-record.
+   - Fix: window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) added to MainActivity.onCreate()
+     before setContent, so all composable screens inherit the flag.
+
+3. [TRUE — noted] Google Firebase credentials are placeholder values.
+   - app/google-services.json has project_number: "000000000000", project_id: "tradeforgood-placeholder",
+     current_key: "PLACEHOLDER_API_KEY_REPLACE_WITH_REAL_ONE".
+   - Cannot be fixed in code — requires a real Firebase project.
+   - Action: Create a Firebase project at console.firebase.google.com, register the app with
+     applicationId "com.tfg.tradeforgood", download the real google-services.json, replace the file.
+
+## High Severity
+
+1. [TRUE — FIXED] EngineManager singleton scope has no cancel path.
+   - CoroutineScope(SupervisorJob() + Dispatchers.Default) was created at construction with no shutdown().
+   - Fix: added shutdown() to EngineManager that calls stopAll() then scope.cancel().
+     TradingForegroundService.onDestroy() now calls engineManager.shutdown() before serviceScope.cancel().
+
+2. [TRUE — FIXED] TP/SL/trailing-stop/closeAll status updated before exchange confirms order sent.
+   - tradingRepository.placeOrder() result was ignored; executedTpLevels, executedSlLevels, and
+     orderDao.updateStatus() were called unconditionally even when placeOrder() returned Result.failure.
+   - Fix: captured Result from placeOrder() in all four paths. State is now only updated inside
+     result.onSuccess {}; failures are logged via result.onFailure {}. The parent order's DB status
+     (FILLED/PARTIALLY_FILLED/CANCELLED) therefore only changes when the exchange actually accepted
+     the close order. Full fill confirmation (WS executionReport) is already done for executeOrder()
+     entry fills; TP/SL close-fill confirmation via WS remains a future improvement.
+
+## Medium Severity
+
+1. [TRUE — FIXED] Offline queue items can be double-processed on concurrent drain calls.
+   - getRetryable() returned all eligible rows; two rapid re-drain triggers could process the same item.
+   - Fix: added isProcessing BOOLEAN column to OfflineQueueEntity (DB migration 12→13).
+     getRetryable() now filters WHERE isProcessing = 0.
+     New claimForProcessing(id) atomically sets isProcessing = 1 WHERE isProcessing = 0, returns rows
+     affected (0 = already claimed by another drainer → skip).
+     markFailed() now also resets isProcessing = 0 so retryable items are re-claimable next drain.
+     drainOfflineQueue() in TradingForegroundService claims before executing; skips if claim returns 0.
+
+2. [TRUE — FIXED] Silent exception swallowing in TradeViewModel order-load paths.
+   - catch (_: Exception) { } in loadOrders() for both open-orders and order-history collectors
+     silently dropped DB/IO failures with no log and no UI feedback.
+   - Fix: replaced both catch blocks with Timber.e() + _state.update { it.copy(error = e.message) }
+     so the UI surfaces a human-readable error and Crashlytics picks up the stack trace.
+
+3. [TRUE — FIXED] Stale template test files with wrong package and no real assertions.
+   - ExampleUnitTest.kt was package com.example.tfg with only addition_isCorrect().
+   - ExampleInstrumentedTest.kt was package com.example.tfg checking wrong package "com.example.tfg".
+   - Fix: ExampleUnitTest.kt → TradingLogicTest (package com.tfg) with 10 tests covering order ID
+     format contract, uniqueness, close-side logic, TP qty math, trailing-stop trigger price, and
+     breakeven activation guard.
+     ExampleInstrumentedTest.kt → TradingAppInstrumentedTest (package com.tfg) checking real
+     applicationId "com.tfg.tradeforgood" and non-null context.
+
+4. [TRUE — noted] Unused Android Studio starter app code remains.
+   - app/src/main/java/com/example/tfg/ (MainActivity.kt + ui/ theme files) is the original template,
+     not the real launcher. It compiles but is dead code.
+   - Action required: delete the folder app/src/main/java/com/example/tfg/ manually in Android Studio
+     or via file explorer. Not auto-deleted since it requires user confirmation.
+
+
+## Critical Blockers
+
+1. [TRUE — FIXED] Blank order IDs are used for manual orders and close/TP/SL/trailing paths.
+   - TradeViewModel creates Order(id=""); TradeExecutor uses id="" for all TP/SL/trailing/close copies.
+   - TradingRepositoryImpl sends blank newClientOrderId to Binance and stores blank as Room PK.
+   - Fix: fixed at repository boundary — TradingRepositoryImpl.placeOrder() generates "tfg"+UUID whenever
+     order.id.isBlank() before any API call or Room insert. TradeViewModel and TradeExecutor callers were
+     NOT changed inline; the repository boundary is the single safe normalization point.
+
+2. [TRUE — FIXED] Room can silently destroy production trading history.
+   - DatabaseModule.kt called .fallbackToDestructiveMigration() — any missing migration deletes all data.
+   - Fix: removed fallbackToDestructiveMigration() from the Room builder.
+
+3. [TRUE — FIXED] Offline queue cancel parsing is logically wrong.
+   - TradeExecutor parsed orderJson with split(",") for CANCEL_ORDER — but queue stores full JSON objects.
+   - Fix: now deserializes orderJson with Gson into Order, then calls cancelOrder(order.id, order.symbol).
+
+## High Severity Issues
+
+1. [TRUE — noted, not auto-fixed] TP/SL/trailing/close status is updated optimistically.
+   - placeOrder() for close/TP/SL is called then status immediately set to FILLED/CANCELLED without confirming fill.
+   - Proper fix requires WebSocket fill-confirmation loop — out of scope for this session.
+
+2. [TRUE — FIXED] Manual market orders may be blocked by risk checks because price defaults to 0.0.
+   - TradeViewModel used toDoubleOrNull() ?: 0.0 for price; RiskEngine blocks MARKET orders when effectivePrice <= 0.0.
+   - Fix: TradeViewModel now falls back to state.ticker?.price for MARKET orders when price field is blank.
+
+3. [TRUE — noted, not auto-fixed] Singleton engine scopes are manually owned.
+   - EngineManager.kt still owns a singleton CoroutineScope with no cancel path.
+   - StrategyRunner.kt owns its own scope, but does properly cancel runnerJob and scope in stop().
+   - TradingForegroundService uses serviceScope correctly tied to onDestroy.
+   - Proper fix requires application-scope injection refactor — out of scope for this session.
+
+4. [TRUE — FIXED] Widget receiver is exported without a permission gate.
+   - Previous incomplete fix: callerPackage extra check is spoofable by any app since extras are untrusted.
+   - Full fix: removed com.tfg.widget.REFRESH action from manifest intent-filter entirely. TradingForegroundService
+     now triggers widget refresh via AppWidgetManager.ACTION_APPWIDGET_UPDATE with explicit widget IDs.
+     The custom ACTION_REFRESH action and onReceive handler have been removed from TradingWidgetProvider.
+
+## Medium Severity Issues
+
+1. [TRUE — FIXED] WebSocket reconnect state is stored in unsynchronized mutable vars.
+   - lastTickerSymbols, lastListenKey, lastKlineSymbol, lastKlineInterval are plain var with no synchronization.
+   - Fix: all four vars now annotated @Volatile.
+
+2. [TRUE — noted, not auto-fixed] Offline queue retry is not transactionally claimed.
+   - getRetryable() returns all rows; markFailed() increments count separately — concurrent drainers could double-process.
+   - Proper fix requires a new isProcessing column + DB migration — out of scope for this session.
+
+3. [TRUE — FIXED] Data extraction rules still contain TODO sample content.
+   - The manifest uses android:dataExtractionRules="@xml/data_extraction_rules" (API 31+).
+     data_extraction_rules.xml was the Android Studio sample/TODO file — this is the file that matters.
+     backup_rules.xml (used by android:fullBackupContent) was also fixed but is secondary since allowBackup=false.
+   - Fix: data_extraction_rules.xml now has explicit cloud-backup and device-transfer exclusion rules
+     for Room DB files, API key prefs, widget state, executor state, and cache.
+
+4. [TRUE — noted, not auto-fixed] Unused generated starter app code remains.
+   - app/src/main/java/com/example/tfg/ (MainActivity.kt + ui/ theme files) not the real launcher.
+   - Deleting source files requires user confirmation — please delete manually if desired.
+
+5. [TRUE — noted, not auto-fixed] Many exceptions are swallowed silently.
+   - Widespread catch blocks only log via Timber without surfacing errors to UI state.
+   - Too widespread for automated fix — address incrementally in user-facing flows.

@@ -1,13 +1,16 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
--->
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto-backup rules: exclude sensitive/ephemeral data from cloud backup -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Exclude API keys and secrets stored in shared preferences -->
+    <exclude domain="sharedpref" path="tfg_secure_prefs.xml" />
+    <!-- Exclude the Room database files (contain order history / candles — too large & sensitive) -->
+    <exclude domain="database" path="tfg_database" />
+    <exclude domain="database" path="tfg_database-shm" />
+    <exclude domain="database" path="tfg_database-wal" />
+    <!-- Exclude widget prefs (stale on restore) -->
+    <exclude domain="sharedpref" path="tfg_widget.xml" />
+    <!-- Exclude trade executor state (peak prices, trailing state) -->
+    <exclude domain="sharedpref" path="trade_executor.xml" />
+    <!-- Exclude HTTP/image cache -->
+    <exclude domain="cache" path="." />
 </full-backup-content>

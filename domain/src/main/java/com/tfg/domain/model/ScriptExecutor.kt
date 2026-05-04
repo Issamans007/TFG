@@ -15,6 +15,14 @@ interface ScriptExecutor {
     fun evaluate(code: String, candles: List<Candle>, params: Map<String, String>, account: ScriptAccount?, htfCandles: Map<String, List<Candle>>): StrategySignal =
         evaluate(code, candles, params, account)
 
+    /**
+     * Evaluate with account context, HTF candles (`_htf`), and related-symbol candles (`_related`).
+     * Related symbols allow strategies to read other pairs' candle data, e.g.
+     * `_related["BTCUSDT"]` inside the strategy JS.
+     */
+    fun evaluate(code: String, candles: List<Candle>, params: Map<String, String>, account: ScriptAccount?, htfCandles: Map<String, List<Candle>>, relatedCandles: Map<String, List<Candle>>): StrategySignal =
+        evaluate(code, candles, params, account, htfCandles)
+
     /** Evaluate and return multiple targeted signals (for multi-pair strategies). */
     fun evaluateMulti(code: String, candles: List<Candle>, params: Map<String, String>, account: ScriptAccount? = null): List<TargetedSignal> =
         listOf(TargetedSignal(null, evaluate(code, candles, params, account)))

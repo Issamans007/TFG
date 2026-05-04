@@ -78,7 +78,10 @@ class TradeViewModel @Inject constructor(
                     val filtered = orders.filter { order -> order.symbol == symbol }
                     _state.update { it.copy(openOrders = filtered) }
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                timber.log.Timber.e(e, "Failed to load open orders for $symbol")
+                _state.update { it.copy(error = e.message ?: "Failed to load open orders") }
+            }
         }
         viewModelScope.launch {
             try {
@@ -86,7 +89,10 @@ class TradeViewModel @Inject constructor(
                     val filtered = orders.filter { order -> order.symbol == symbol }
                     _state.update { it.copy(orderHistory = filtered) }
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                timber.log.Timber.e(e, "Failed to load order history for $symbol")
+                _state.update { it.copy(error = e.message ?: "Failed to load order history") }
+            }
         }
     }
 
@@ -115,7 +121,10 @@ class TradeViewModel @Inject constructor(
                 _state.update { it.copy(isLoading = false, error = "Invalid quantity") }
                 return@launch
             }
-            val prc = s.price.toDoubleOrNull() ?: 0.0
+            val prc = s.price.toDoubleOrNull()
+                ?: if (s.orderType == com.tfg.domain.model.OrderType.MARKET) s.ticker?.price
+                else null
+                ?: 0.0
 
             val tpParsed = if (s.tpPrice.isNotBlank()) {
                 s.tpPrice.toDoubleOrNull() ?: run {

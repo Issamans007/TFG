@@ -87,6 +87,9 @@ class StrategyRunner @Inject constructor(
         }
 
     private var consecutiveFailures = 0
+    /** Live-trading trade-result tracking for _account injection */
+    @Volatile private var liveLastTradeResult: String? = null
+    @Volatile private var liveConsecutiveLosses: Int = 0
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun start() {
@@ -179,6 +182,7 @@ class StrategyRunner @Inject constructor(
                         riskEngine.updateVolatility(atrPct)
 
                         // Build account context for JS scripts
+                        val prevPosition = currentPosition
                         val pos = currentPosition
                         val lastClose = candles.last().close
                         // Single portfolio fetch per bar — reused for ScriptAccount + trade execution
@@ -186,6 +190,15 @@ class StrategyRunner @Inject constructor(
                             portfolioRepository.refreshPortfolio()
                             portfolioRepository.getPortfolio().first()
                         } catch (_: Exception) { null }
+                        // Detect position closure and update live trade-result trackers
+                        if (prevPosition != null && pos == null) {
+                            val estimatedPnl = if (prevPosition.side == OrderSide.BUY)
+                                (lastClose - prevPosition.entryPrice) * prevPosition.quantity
+                            else
+                                (prevPosition.entryPrice - lastClose) * prevPosition.quantity
+                            liveLastTradeResult = if (estimatedPnl > 0) "WIN" else if (estimatedPnl < 0) "LOSS" else "EVEN"
+                            if (estimatedPnl < 0) liveConsecutiveLosses++ else liveConsecutiveLosses = 0
+                        }
                         val acctContext = ScriptAccount(
                             equity = portfolio?.totalBalance ?: 0.0,
                             balance = portfolio?.totalBalance ?: 0.0,
@@ -195,7 +208,10 @@ class StrategyRunner @Inject constructor(
                                 else (pos.entryPrice - lastClose) * pos.quantity
                             } else 0.0,
                             positionSize = pos?.quantity ?: 0.0,
-                            positionEntry = pos?.entryPrice ?: 0.0
+                            positionEntry = pos?.entryPrice ?: 0.0,
+                            lastTradeResult = liveLastTradeResult,
+                            pendingOrderCount = 0,
+                            consecutiveLosses = liveConsecutiveLosses
                         )
 
                         // B1: Refresh HTF candles periodically
@@ -204,8 +220,10 @@ class StrategyRunner @Inject constructor(
                             htfCache = fetchHtfCandles(symbol, htfIntervals)
                             lastHtfFetchMs = now
                         }
+                        // Fetch related-symbol candles for _related access in strategy
+                        val relatedCache = fetchRelatedCandles(script.relatedSymbols, interval)
                         // All strategies execute via JS engine
-                        val rawSignal = scriptExecutor.evaluate(script.code, candles, script.params, acctContext, htfCache)
+                        val rawSignal = scriptExecutor.evaluate(script.code, candles, script.params, acctContext, htfCache, relatedCache)
                         _lastSignal.value = rawSignal.javaClass.simpleName
                         _dashboardJson.value = scriptExecutor.getLastDashboard()
                         _plotDataJson.value = scriptExecutor.getLastPlotData()
@@ -604,6 +622,21 @@ class StrategyRunner @Inject constructor(
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Failed to fetch HTF candles for $symbol/$htfInterval")
+            }
+        }
+        return result
+    }
+
+    /** Fetch candles for each related symbol (at the same interval) to expose as `_related` in JS. */
+    private suspend fun fetchRelatedCandles(symbols: List<String>, interval: String): Map<String, List<Candle>> {
+        if (symbols.isEmpty()) return emptyMap()
+        val result = mutableMapOf<String, List<Candle>>()
+        for (sym in symbols) {
+            try {
+                val candles = marketRepository.getCandles(sym, interval, 200).first()
+                if (candles.isNotEmpty()) result[sym] = candles
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to fetch related candles for $sym/$interval")
             }
         }
         return result

@@ -4,10 +4,12 @@ import androidx.room.EntityInsertAdapter
 import androidx.room.RoomDatabase
 import androidx.room.coroutines.createFlow
 import androidx.room.util.getColumnIndexOrThrow
+import androidx.room.util.getTotalChangedRows
 import androidx.room.util.performSuspending
 import androidx.sqlite.SQLiteStatement
 import com.tfg.`data`.local.entity.OfflineQueueEntity
 import javax.`annotation`.processing.Generated
+import kotlin.Boolean
 import kotlin.Int
 import kotlin.Long
 import kotlin.String
@@ -31,7 +33,7 @@ public class OfflineQueueDao_Impl(
     this.__db = __db
     this.__insertAdapterOfOfflineQueueEntity = object : EntityInsertAdapter<OfflineQueueEntity>() {
       protected override fun createQuery(): String =
-          "INSERT OR REPLACE INTO `offline_queue` (`id`,`signalJson`,`orderJson`,`action`,`priority`,`createdAt`,`retryCount`,`maxRetries`,`lastError`) VALUES (?,?,?,?,?,?,?,?,?)"
+          "INSERT OR REPLACE INTO `offline_queue` (`id`,`signalJson`,`orderJson`,`action`,`priority`,`createdAt`,`retryCount`,`maxRetries`,`lastError`,`isProcessing`) VALUES (?,?,?,?,?,?,?,?,?,?)"
 
       protected override fun bind(statement: SQLiteStatement, entity: OfflineQueueEntity) {
         statement.bindText(1, entity.id)
@@ -58,6 +60,8 @@ public class OfflineQueueDao_Impl(
         } else {
           statement.bindText(9, _tmpLastError)
         }
+        val _tmp: Int = if (entity.isProcessing) 1 else 0
+        statement.bindLong(10, _tmp.toLong())
       }
     }
   }
@@ -81,6 +85,7 @@ public class OfflineQueueDao_Impl(
         val _columnIndexOfRetryCount: Int = getColumnIndexOrThrow(_stmt, "retryCount")
         val _columnIndexOfMaxRetries: Int = getColumnIndexOrThrow(_stmt, "maxRetries")
         val _columnIndexOfLastError: Int = getColumnIndexOrThrow(_stmt, "lastError")
+        val _columnIndexOfIsProcessing: Int = getColumnIndexOrThrow(_stmt, "isProcessing")
         val _result: MutableList<OfflineQueueEntity> = mutableListOf()
         while (_stmt.step()) {
           val _item: OfflineQueueEntity
@@ -114,8 +119,12 @@ public class OfflineQueueDao_Impl(
           } else {
             _tmpLastError = _stmt.getText(_columnIndexOfLastError)
           }
+          val _tmpIsProcessing: Boolean
+          val _tmp: Int
+          _tmp = _stmt.getLong(_columnIndexOfIsProcessing).toInt()
+          _tmpIsProcessing = _tmp != 0
           _item =
-              OfflineQueueEntity(_tmpId,_tmpSignalJson,_tmpOrderJson,_tmpAction,_tmpPriority,_tmpCreatedAt,_tmpRetryCount,_tmpMaxRetries,_tmpLastError)
+              OfflineQueueEntity(_tmpId,_tmpSignalJson,_tmpOrderJson,_tmpAction,_tmpPriority,_tmpCreatedAt,_tmpRetryCount,_tmpMaxRetries,_tmpLastError,_tmpIsProcessing)
           _result.add(_item)
         }
         _result
@@ -147,7 +156,7 @@ public class OfflineQueueDao_Impl(
 
   public override suspend fun getRetryable(): List<OfflineQueueEntity> {
     val _sql: String =
-        "SELECT * FROM offline_queue WHERE retryCount < maxRetries ORDER BY priority DESC, createdAt ASC"
+        "SELECT * FROM offline_queue WHERE retryCount < maxRetries AND isProcessing = 0 ORDER BY priority DESC, createdAt ASC"
     return performSuspending(__db, true, false) { _connection ->
       val _stmt: SQLiteStatement = _connection.prepare(_sql)
       try {
@@ -160,6 +169,7 @@ public class OfflineQueueDao_Impl(
         val _columnIndexOfRetryCount: Int = getColumnIndexOrThrow(_stmt, "retryCount")
         val _columnIndexOfMaxRetries: Int = getColumnIndexOrThrow(_stmt, "maxRetries")
         val _columnIndexOfLastError: Int = getColumnIndexOrThrow(_stmt, "lastError")
+        val _columnIndexOfIsProcessing: Int = getColumnIndexOrThrow(_stmt, "isProcessing")
         val _result: MutableList<OfflineQueueEntity> = mutableListOf()
         while (_stmt.step()) {
           val _item: OfflineQueueEntity
@@ -193,8 +203,12 @@ public class OfflineQueueDao_Impl(
           } else {
             _tmpLastError = _stmt.getText(_columnIndexOfLastError)
           }
+          val _tmpIsProcessing: Boolean
+          val _tmp: Int
+          _tmp = _stmt.getLong(_columnIndexOfIsProcessing).toInt()
+          _tmpIsProcessing = _tmp != 0
           _item =
-              OfflineQueueEntity(_tmpId,_tmpSignalJson,_tmpOrderJson,_tmpAction,_tmpPriority,_tmpCreatedAt,_tmpRetryCount,_tmpMaxRetries,_tmpLastError)
+              OfflineQueueEntity(_tmpId,_tmpSignalJson,_tmpOrderJson,_tmpAction,_tmpPriority,_tmpCreatedAt,_tmpRetryCount,_tmpMaxRetries,_tmpLastError,_tmpIsProcessing)
           _result.add(_item)
         }
         _result
@@ -218,9 +232,24 @@ public class OfflineQueueDao_Impl(
     }
   }
 
+  public override suspend fun claimForProcessing(id: String): Int {
+    val _sql: String = "UPDATE offline_queue SET isProcessing = 1 WHERE id = ? AND isProcessing = 0"
+    return performSuspending(__db, false, true) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        var _argIndex: Int = 1
+        _stmt.bindText(_argIndex, id)
+        _stmt.step()
+        getTotalChangedRows(_connection)
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
   public override suspend fun markFailed(id: String, error: String) {
     val _sql: String =
-        "UPDATE offline_queue SET retryCount = retryCount + 1, lastError = ? WHERE id = ?"
+        "UPDATE offline_queue SET retryCount = retryCount + 1, lastError = ?, isProcessing = 0 WHERE id = ?"
     return performSuspending(__db, false, true) { _connection ->
       val _stmt: SQLiteStatement = _connection.prepare(_sql)
       try {

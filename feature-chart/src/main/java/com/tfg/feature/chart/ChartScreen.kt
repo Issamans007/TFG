@@ -170,6 +170,9 @@ fun CoinDetailScreen(
                     dashboardJson = state.dashboardOverlayJson,
                     chartType = state.chartType,
                     symbol = state.symbol,
+                    savedDrawingsJson = state.savedDrawingsJson,
+                    onDrawing = { type, data -> viewModel.onDrawingAdded(type, data) },
+                    onDrawingsSync = { json -> viewModel.onDrawingsSync(json) },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 4.dp)

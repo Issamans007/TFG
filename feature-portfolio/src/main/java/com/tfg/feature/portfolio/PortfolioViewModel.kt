@@ -85,8 +85,9 @@ class PortfolioViewModel @Inject constructor(
                     getPortfolioUseCase().collect { portfolio ->
                         _state.update { it.copy(portfolio = portfolio, isLoading = false) }
                     }
-                } catch (_: Exception) {
-                    _state.update { it.copy(isLoading = false) }
+                } catch (e: Exception) {
+                    timber.log.Timber.e(e, "Failed to load portfolio")
+                    _state.update { it.copy(isLoading = false, error = e.message) }
                 }
             }
             
@@ -98,7 +99,7 @@ class PortfolioViewModel @Inject constructor(
                     getAnalyticsUseCase(thirtyDaysAgo, now, _state.value.isPaper).collect { analytics ->
                         _state.update { it.copy(analytics = analytics) }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) { timber.log.Timber.e(e, "Failed to load analytics") }
             }
             
             // Get equity curve
@@ -107,7 +108,7 @@ class PortfolioViewModel @Inject constructor(
                     getEquityCurveUseCase(_state.value.isPaper).collect { equity ->
                         _state.update { it.copy(equityCurve = equity) }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) { timber.log.Timber.e(e, "Failed to load equity curve") }
             }
             
             // Get daily P&L
@@ -116,7 +117,7 @@ class PortfolioViewModel @Inject constructor(
                     getDailyPnlUseCase(30, _state.value.isPaper).collect { pnl ->
                         _state.update { it.copy(dailyPnl = pnl) }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) { timber.log.Timber.e(e, "Failed to load daily P&L") }
             }
             
             // Get pair performance
@@ -125,7 +126,7 @@ class PortfolioViewModel @Inject constructor(
                     getPairPerformanceUseCase(_state.value.isPaper).collect { pairs ->
                         _state.update { it.copy(pairPerformance = pairs) }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) { timber.log.Timber.e(e, "Failed to load pair performance") }
             }
 
             // Fallback: stop loading after 3s no matter what

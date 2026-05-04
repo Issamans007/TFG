@@ -143,6 +143,10 @@ object EntityMapper {
             try { gson.fromJson<Map<String, String>>(it, object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type) }
             catch (_: Exception) { emptyMap() }
         } ?: emptyMap(),
+        relatedSymbols = relatedSymbolsJson?.let {
+            try { gson.fromJson<List<String>>(it, object : com.google.gson.reflect.TypeToken<List<String>>() {}.type) }
+            catch (_: Exception) { emptyList() }
+        } ?: emptyList(),
         lastRun = lastRun,
         backtestResult = backtestResultJson?.let { gson.fromJson(it, BacktestResult::class.java) },
         createdAt = createdAt, updatedAt = updatedAt
@@ -153,6 +157,7 @@ object EntityMapper {
         activeSymbol = activeSymbol,
         strategyTemplateId = strategyTemplateId,
         paramsJson = if (params.isNotEmpty()) gson.toJson(params) else null,
+        relatedSymbolsJson = if (relatedSymbols.isNotEmpty()) gson.toJson(relatedSymbols) else null,
         lastRun = lastRun,
         backtestResultJson = backtestResult?.let { gson.toJson(it) },
         createdAt = createdAt, updatedAt = updatedAt

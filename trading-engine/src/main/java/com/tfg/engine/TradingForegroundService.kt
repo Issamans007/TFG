@@ -13,7 +13,10 @@ import com.tfg.data.remote.api.UserDataStreamManager
 import com.tfg.data.remote.websocket.WebSocketManager
 import com.tfg.domain.model.*
 import com.tfg.domain.repository.AuditRepository
+import com.tfg.domain.repository.PortfolioRepository
 import com.tfg.domain.repository.TradingRepository
+import com.tfg.domain.service.ConsoleBus
+import com.tfg.domain.service.ConsoleSource
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -32,7 +35,11 @@ class TradingForegroundService : Service() {
     @Inject lateinit var engineManager: EngineManager
     @Inject lateinit var auditRepository: AuditRepository
     @Inject lateinit var tradingRepository: TradingRepository
+    @Inject lateinit var portfolioRepository: PortfolioRepository
+    @Inject lateinit var consoleBus: ConsoleBus
     @Inject lateinit var userDataStreamManager: UserDataStreamManager
+    @Inject lateinit var alertDao: AlertDao
+    @Inject lateinit var tradingPairDao: TradingPairDao
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var wakeLock: PowerManager.WakeLock? = null
@@ -98,6 +105,38 @@ class TradingForegroundService : Service() {
         // Open Binance user-data stream (executionReport / ORDER_TRADE_UPDATE)
         // — enables real-time fill detection + listenKey keepalive every 30 min.
         userDataStreamManager.start()
+
+        // Seed RiskEngine with real portfolio balance before the first bar fires.
+        // Without this, risk checks run against a zero-balance default until the
+        // first StrategyRunner bar tick (which may be 1s or more after startup).
+        // Retry up to 3 times to tolerate transient network hiccups at cold start.
+        serviceScope.launch {
+            var seeded = false
+            repeat(3) { attempt ->
+                if (seeded) return@repeat
+                try {
+                    portfolioRepository.refreshPortfolio()
+                    val portfolio = portfolioRepository.getPortfolio().first()
+                    riskEngine.updatePortfolio(portfolio)
+                    seeded = true
+                    Timber.i("Startup portfolio seed OK: balance=%.2f".format(portfolio.totalBalance))
+                } catch (e: Exception) {
+                    Timber.w(e, "Startup portfolio seed attempt ${attempt + 1}/3 failed")
+                    if (attempt == 2) {
+                        // All retries exhausted — surface a prominent console warning.
+                        consoleBus.warn(
+                            ConsoleSource.SYSTEM,
+                            "Portfolio unavailable at startup",
+                            "Could not fetch balance after 3 attempts. " +
+                            "All trades will be blocked until the portfolio refreshes. " +
+                            "Check your internet connection.",
+                        )
+                    } else {
+                        delay(2_000L * (attempt + 1)) // 2s, 4s back-off
+                    }
+                }
+            }
+        }
 
         // Reconcile with Binance BEFORE the monitoring loop starts so any
         // ghost orders / positions opened or closed off-app are detected and
@@ -196,6 +235,23 @@ class TradingForegroundService : Service() {
             tradeExecutor.checkTimeBasedOrder(order)
         }
 
+        // Check price-line alerts
+        val priceAlerts = alertDao.getEnabled().first().filter { it.type == "PRICE" }
+        for (alert in priceAlerts) {
+            val pair = tradingPairDao.getBySymbol(alert.symbol).first() ?: continue
+            val currentPrice = pair.lastPrice
+            val triggered = when (alert.condition) {
+                "CROSSES_ABOVE" -> currentPrice >= alert.targetValue
+                "CROSSES_BELOW" -> currentPrice <= alert.targetValue
+                else -> false
+            }
+            if (triggered) {
+                alertDao.updateEnabled(alert.id, false)
+                alertDao.recordTrigger(alert.id, System.currentTimeMillis())
+                firePriceAlertNotification(alert.symbol, alert.targetValue, alert.condition, currentPrice)
+            }
+        }
+
         // Update home screen widget (throttled to ~30s)
         widgetUpdateCounter++
         if (widgetUpdateCounter >= 30) {
@@ -208,19 +264,31 @@ class TradingForegroundService : Service() {
 
     private fun updateHomeWidget(positionCount: Int) {
         try {
-            val intent = android.content.Intent("com.tfg.widget.REFRESH")
-            intent.setPackage(packageName)
-            sendBroadcast(intent)
+            val manager = android.appwidget.AppWidgetManager.getInstance(this)
+            val ids = manager.getAppWidgetIds(
+                android.content.ComponentName(this, "com.tfg.widget.TradingWidgetProvider")
+            )
+            if (ids.isNotEmpty()) {
+                val intent = android.content.Intent(android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE)
+                intent.setPackage(packageName)
+                intent.putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+                sendBroadcast(intent)
+            }
         } catch (_: Exception) { }
     }
 
     private suspend fun drainOfflineQueue() {
         val items = offlineQueueDao.getRetryable()
         for (item in items) {
+            // Atomically claim the row so a second concurrent drain triggered by
+            // a rapid network reconnect event does not double-process the same item.
+            val claimed = offlineQueueDao.claimForProcessing(item.id)
+            if (claimed == 0) continue   // another drainer already owns this item
             try {
                 tradeExecutor.executeQueueItem(item)
                 offlineQueueDao.delete(item.id)
             } catch (e: Exception) {
+                // markFailed also resets isProcessing so the item is retried next drain
                 offlineQueueDao.markFailed(item.id, e.message ?: "Unknown error")
             }
         }
@@ -263,6 +331,33 @@ class TradingForegroundService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         Timber.i("TradingForegroundService stopped")
+    }
+
+    private fun firePriceAlertNotification(
+        symbol: String, targetPrice: Double, condition: String, currentPrice: Double
+    ) {
+        try {
+            val channelId = "tfg_price_alerts"
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(channelId, "Price Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+                        description = "Notifications when price alert levels are reached"
+                        enableLights(true)
+                        enableVibration(true)
+                    }
+                )
+            }
+            val directionWord = if (condition == "CROSSES_ABOVE") "above" else "below"
+            val notif = NotificationCompat.Builder(this, channelId)
+                .setContentTitle("Price Alert: $symbol")
+                .setContentText("$symbol reached $directionWord ${String.format("%.6f", targetPrice).trimEnd('0').trimEnd('.')} (now ${String.format("%.6f", currentPrice).trimEnd('0').trimEnd('.')})")
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(NOTIFICATION_ID + 100 + symbol.hashCode().and(0xFFFF), notif)
+        } catch (_: Exception) {}
     }
 
     private fun acquireWakeLock() {
@@ -397,6 +492,7 @@ class TradingForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        engineManager.shutdown()
         serviceScope.cancel()
         releaseWakeLock()
     }
