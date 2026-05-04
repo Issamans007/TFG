@@ -42,7 +42,7 @@ class PortfolioRepositoryImpl @Inject constructor(
                     timestamp = System.currentTimeMillis()
                 )
             )
-        } catch (_: Exception) { }
+        } catch (e: Exception) { Timber.w(e, "Failed to write API error to audit log") }
     }
 
     override fun getPortfolio(): Flow<Portfolio> =

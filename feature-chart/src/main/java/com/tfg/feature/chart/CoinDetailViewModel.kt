@@ -974,7 +974,7 @@ class CoinDetailViewModel @Inject constructor(
                     val indicators = computeScriptIndicators(script, candles)
                     _state.update { it.copy(customIndicators = indicators) }
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) { Timber.w(e, "Failed to compute custom script indicators") }
         }
     }
 

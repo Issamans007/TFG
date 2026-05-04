@@ -1,16 +1,16 @@
 -- Merging decision tree log ---
 manifest
-ADDED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml:2:13-83
-INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml:2:13-83
+ADDED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml:2:13-83
+INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml:2:13-83
 	package
-		INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml
+		INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml
 	xmlns:android
-		ADDED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml:2:23-81
+		ADDED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml:2:23-81
 uses-sdk
-INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml reason: use-sdk injection requested
-INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml
-INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml
+INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml reason: use-sdk injection requested
+INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml
+INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml
 	android:targetSdkVersion
-		INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml
+		INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml
 	android:minSdkVersion
-		INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest6460223203098076543.xml
+		INJECTED from C:\Users\user\Desktop\FYP\Project withsql\tfg\trading-engine\build\intermediates\tmp\ProcessLibraryManifest\debug\tempAndroidManifest14833180163324854398.xml

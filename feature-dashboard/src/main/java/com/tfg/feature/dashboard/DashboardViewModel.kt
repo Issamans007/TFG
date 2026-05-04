@@ -181,7 +181,7 @@ class DashboardViewModel @Inject constructor(
                     .mapIndexed { i, t -> DashboardCardConfig(t, true, entries.size + i) }
                 _state.update { it.copy(cardConfigs = entries + missing) }
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) { timber.log.Timber.w(e, "Failed to parse card config — resetting to defaults") }
     }
 
     private fun saveCardConfig() {

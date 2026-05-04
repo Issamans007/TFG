@@ -207,7 +207,7 @@ class NewsFeedRepository {
                     )
                 )
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) { timber.log.Timber.w(e, "Failed to parse Reddit JSON") }
         return articles
     }
 

@@ -274,7 +274,7 @@ class TradingForegroundService : Service() {
                 intent.putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
                 sendBroadcast(intent)
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) { Timber.w(e, "Widget update failed") }
     }
 
     private suspend fun drainOfflineQueue() {
